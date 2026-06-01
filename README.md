@@ -19,6 +19,21 @@ Two commands in Claude Code:
 
 The first adds this repo as a marketplace. The second installs the `catalog` plugin from it — only the `/catalog` slash command. No hooks, no background daemon, nothing fires on your normal Claude turns.
 
+## What you get
+
+- **One pane for everything installed** — skills, slash commands, MCP servers, and plugins, with their description, source path, and how often you actually use them.
+- **Usage tracking** — per-item counts, last-used time, and a 60-day sparkline derived from your real history.
+- **Filter pills** — type (skill / command / mcp / plugin), `stale` (anything outside the activity window), and a `built-ins` toggle for Claude Code's built-in commands and built-in MCPs (off by default).
+- **Configurable activity window** — 7 / 14 / 30 / 90 / 180 days or all-time. Items outside the window are considered stale.
+- **Tree view** — group plugin children under their parent plugin with expand-all / collapse-all. Flat list is also available.
+- **MCP per-tool breakdown** — each MCP server detail pane lists the tools you've actually called, with counts and last-used.
+- **External orphans** — items that appear in your usage history but whose source isn't in the current scan (e.g. used from another project, uninstalled plugins) are surfaced as `EXTERNAL` so they don't disappear silently.
+- **Disabled plugins** — plugins sitting in the cache without an `.in_use` marker show with a `DISABLED` badge.
+- **Source preview** — the detail pane renders the SKILL.md / command.md markdown by default, with VS Code / Cursor / Reveal-in-Finder links.
+- **Keyboard navigation** — `j` / `k` / arrows to move, `g` / `G` to jump, `/` to focus search, `Esc` to clear.
+- **URL deep linking** — filter state lives in the query string, selected item in the hash, so links restore the same view.
+- **Light / dark mode** — auto-detects system preference; toggle persists.
+
 ## Where the data comes from
 
 The catalog is **read-only**. It computes everything from files Claude Code already maintains on its own — no hooks, no per-turn instrumentation, no separate event log.
@@ -32,7 +47,7 @@ Since the catalog only reads, installing it is purely additive: it doesn't modif
 
 ## What runs on your machine
 
-- A small Node HTTP server (`node:http`, zero native deps) on port `47823` (auto-fallback if taken). Bound to `127.0.0.1` only. Idle-shuts down after 30 min.
+- A small Node HTTP server (`node:http`, zero native deps) on port `47823` (override with `CATALOG_PORT`). Bound to `127.0.0.1` only. Idle-shuts down after 30 min.
 - A single-page UI loaded from disk, using Preact + Tailwind via CDN.
 
 That's it. No hooks. No daemon. No telemetry. No build step.
@@ -43,7 +58,7 @@ Everything stays on your machine. Because the catalog is read-only, the on-disk 
 
 **Written by the catalog**
 - `~/.claude/catalog/server.log` — server stdout/stderr.
-- `~/.claude/catalog/port` — the chosen port if the default `47823` is taken.
+- `~/.claude/catalog/port` — the port the server is listening on.
 
 That's all. The catalog never modifies `~/.claude/settings.json`, never writes events, and never touches your prompt history or session transcripts.
 
@@ -75,18 +90,6 @@ rm -rf ~/.claude/catalog   # optional, removes the server log
 
 - Claude Code
 - Node 18 or newer (already required by Claude Code itself)
-
-## Status
-
-Working. Roadmap:
-
-- [x] Plugin manifest + `/catalog` slash command
-- [x] Filesystem scanner (skills, commands, MCP, plugins; user / project / plugin scopes)
-- [x] Historical backfill from `history.jsonl` + session transcripts + `skillUsage`
-- [x] UI: list / tree views, search, type filters, sort, light/dark, sparklines, source-body preview, open-in-editor links, configurable activity window
-- [x] Keyboard navigation (`j`/`k`, arrows, `g`/`G`, `/` to search, `Esc` to clear) and URL deep linking (filters in query, selected item in hash)
-- [x] MCP per-tool breakdown under each server item (inferred from session transcripts)
-- [x] Built-in MCPs (e.g. `ide`) and disabled plugins surfaced in the catalog
 
 ## License
 
