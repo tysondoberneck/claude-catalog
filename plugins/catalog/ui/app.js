@@ -369,6 +369,7 @@ function App() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const fromPlugin = (it) => it.scope?.startsWith?.('plugin:');
     let out = items.filter((it) => {
       const stale = isStaleForWindow(it, windowDays);
       if (type === 'stale') {
@@ -378,6 +379,9 @@ function App() {
         // catalog stays focused on what you actually use right now.
         if (stale) return false;
         if (type !== 'all' && it.type !== type) return false;
+        // Skill/command/mcp views show only user- or project-scoped items;
+        // plugin-provided children live under the plugin filter, not here.
+        if ((type === 'skill' || type === 'command' || type === 'mcp') && fromPlugin(it)) return false;
       }
       if (!q) return true;
       return (
@@ -408,12 +412,18 @@ function App() {
     // Type-pill counts only include items inside the activity window so the
     // numbers match what the user actually sees in the list.
     const c = { all: 0, skill: 0, command: 0, mcp: 0, plugin: 0, stale: 0 };
+    const fromPlugin = (it) => it.scope?.startsWith?.('plugin:');
     for (const it of items) {
       if (isStaleForWindow(it, windowDays)) {
         c.stale += 1;
       } else {
         c.all += 1;
-        c[it.type] = (c[it.type] ?? 0) + 1;
+        // Plugin-provided skills/commands/mcps count toward the plugin pill
+        // only — they're listed inside their parent plugin, not in the
+        // standalone skill/command/mcp views.
+        if (it.type === 'plugin' || !fromPlugin(it)) {
+          c[it.type] = (c[it.type] ?? 0) + 1;
+        }
       }
     }
     return c;
@@ -456,12 +466,18 @@ function App() {
     // children counts of the visible kind. When the type filter is "plugin",
     // we don't restrict children (browsing what's inside a plugin makes more
     // sense than hiding everything).
+    // Plugin-provided children only surface when the user is browsing plugins
+    // (type === 'all' or 'plugin'); skill/command/mcp views are reserved for
+    // user- and project-scoped items.
+    const showPluginSection = type === 'all' || type === 'plugin' || type === 'stale';
     const visibleChildrenOf = (g) => g.children.filter((c) => type === 'plugin' || leafVisible(c));
-    const groupsToShow = groups.pluginGroups
-      .map((g) => ({ ...g, visibleChildren: visibleChildrenOf(g) }))
-      .filter((g) => type === 'all' || type === 'plugin' || g.visibleChildren.length > 0);
+    const groupsToShow = !showPluginSection
+      ? []
+      : groups.pluginGroups
+          .map((g) => ({ ...g, visibleChildren: visibleChildrenOf(g) }))
+          .filter((g) => type === 'all' || type === 'plugin' || g.visibleChildren.length > 0);
 
-    const userItemsVisible   = type === 'plugin' ? [] : groups.userItems.filter(leafVisible);
+    const userItemsVisible    = type === 'plugin' ? [] : groups.userItems.filter(leafVisible);
     const projectItemsVisible = type === 'plugin' ? [] : groups.projectItems.filter(leafVisible);
 
     return html`
