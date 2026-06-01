@@ -9,6 +9,20 @@ import { fileURLToPath } from 'node:url';
 
 import { scanInventory } from './scanner.mjs';
 import { aggregateByItem } from './storage.mjs';
+import { aggregateFromHistory } from './history.mjs';
+
+function mergeUsage(a, b) {
+  const out = new Map(a);
+  for (const [id, v] of b) {
+    const cur = out.get(id) ?? { count: 0, last_ts: 0, errors: 0 };
+    out.set(id, {
+      count: cur.count + v.count,
+      last_ts: Math.max(cur.last_ts, v.last_ts),
+      errors: cur.errors + v.errors,
+    });
+  }
+  return out;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, '..');
@@ -59,13 +73,32 @@ async function handleApiItems(req, res) {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const cwd = url.searchParams.get('cwd') || process.cwd();
 
-  const [inventory, usage] = await Promise.all([
+  const [inventory, liveUsage, historicalUsage] = await Promise.all([
     scanInventory({ cwd }),
     aggregateByItem(),
+    aggregateFromHistory(),
   ]);
+  const usage = mergeUsage(historicalUsage, liveUsage);
 
   const items = inventory.map((item) => {
-    const u = usage.get(item.id);
+    let u = usage.get(item.id);
+    // MCP server items: roll up per-tool events (id "mcp:<server>:<tool>") to
+    // the server-level item. Events are emitted per-tool by the hooks but the
+    // catalog displays one item per server with aggregate stats.
+    if (item.type === 'mcp') {
+      const prefix = item.id + ':';
+      let count = u?.count ?? 0;
+      let last_ts = u?.last_ts ?? 0;
+      let errors = u?.errors ?? 0;
+      for (const [eid, e] of usage) {
+        if (eid.startsWith(prefix)) {
+          count += e.count;
+          if (e.last_ts > last_ts) last_ts = e.last_ts;
+          errors += e.errors;
+        }
+      }
+      u = { count, last_ts, errors };
+    }
     return {
       ...item,
       usage: u ? { count: u.count, last_ts: u.last_ts, errors: u.errors } : { count: 0, last_ts: 0, errors: 0 },

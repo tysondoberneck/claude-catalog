@@ -12,6 +12,13 @@ const SORTS = [
   { id: 'name',       label: 'Name' },
 ];
 
+const CHIP_BY_TYPE = {
+  skill:   'ring-amber-500/40    text-amber-700    dark:text-amber-300',
+  command: 'ring-blue-500/40     text-blue-700     dark:text-blue-300',
+  mcp:     'ring-emerald-500/40  text-emerald-700  dark:text-emerald-300',
+  plugin:  'ring-zinc-400/60     text-zinc-700     dark:text-zinc-300',
+};
+
 function relTime(ts) {
   if (!ts) return 'never';
   const diff = Date.now() - ts;
@@ -22,23 +29,47 @@ function relTime(ts) {
   const hr = Math.floor(m / 60);
   if (hr < 24) return `${hr}h ago`;
   const d = Math.floor(hr / 24);
-  return `${d}d ago`;
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
 }
 
 function TypeChip({ type }) {
-  const color = {
-    skill: 'bg-emerald-500/20 text-emerald-300',
-    command: 'bg-sky-500/20 text-sky-300',
-    mcp: 'bg-violet-500/20 text-violet-300',
-    plugin: 'bg-amber-500/20 text-amber-300',
-  }[type] ?? 'bg-slate-500/20 text-slate-300';
-  return html`<span class="px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider ${color}">${type}</span>`;
+  const cls = CHIP_BY_TYPE[type] ?? CHIP_BY_TYPE.plugin;
+  return html`<span class="px-1.5 py-0.5 rounded ring-1 ${cls} text-[10px] font-medium uppercase tracking-wider mono">${type}</span>`;
 }
 
 function ScopeBadge({ scope }) {
-  if (scope === 'project') return html`<span class="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px] font-medium uppercase tracking-wider">project</span>`;
-  if (scope?.startsWith?.('plugin:')) return html`<span class="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 text-[10px] mono">${scope}</span>`;
+  if (scope === 'project') {
+    return html`<span class="px-1.5 py-0.5 rounded ring-1 ring-rose-500/40 text-rose-700 dark:text-rose-300 text-[10px] font-medium uppercase tracking-wider mono">project</span>`;
+  }
+  if (scope?.startsWith?.('plugin:')) {
+    return html`<span class="px-1.5 py-0.5 rounded bg-zinc-200/70 dark:bg-zinc-800/70 text-zinc-600 dark:text-zinc-400 text-[10px] mono">${scope}</span>`;
+  }
   return null;
+}
+
+function ThemeToggle({ theme, onToggle }) {
+  const isDark = theme === 'dark';
+  return html`
+    <button
+      onClick=${onToggle}
+      title=${isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      class="p-1.5 rounded-md text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 transition"
+    >
+      ${isDark ? html`
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+        </svg>
+      ` : html`
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      `}
+    </button>
+  `;
 }
 
 function App() {
@@ -51,6 +82,14 @@ function App() {
   const [selected, setSelected] = useState(null);
   const [scannedAt, setScannedAt] = useState(null);
   const [cwd, setCwd] = useState('');
+  const [theme, setTheme] = useState(document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+
+  function toggleTheme() {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    document.documentElement.classList.toggle('dark', next === 'dark');
+    try { localStorage.setItem('catalog.theme', next); } catch (_) {}
+  }
 
   async function load() {
     try {
@@ -106,13 +145,18 @@ function App() {
     return c;
   }, [items]);
 
+  const totalUses = useMemo(
+    () => items.reduce((acc, it) => acc + (it.usage?.count ?? 0), 0),
+    [items],
+  );
+
   return html`
     <div class="h-full flex flex-col">
-      <header class="border-b border-slate-800 px-5 py-3 flex items-center gap-4">
+      <header class="border-b border-zinc-200 dark:border-zinc-800 px-5 py-3 flex items-center gap-4">
         <div class="flex items-center gap-2">
-          <span class="text-emerald-400 mono text-sm">▍</span>
+          <span class="text-amber-500 mono text-sm">▍</span>
           <span class="font-semibold tracking-tight">catalog</span>
-          <span class="text-slate-500 text-xs mono">${cwd || ''}</span>
+          <span class="text-zinc-500 text-xs mono truncate max-w-[28ch]" title=${cwd}>${cwd || ''}</span>
         </div>
         <div class="flex-1 max-w-xl">
           <input
@@ -120,7 +164,7 @@ function App() {
             placeholder="Search skills, commands, MCP tools, plugins…"
             value=${query}
             onInput=${(e) => setQuery(e.currentTarget.value)}
-            class="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-1.5 text-sm placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            class="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-3 py-1.5 text-sm placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
           />
         </div>
         <div class="flex gap-1">
@@ -128,43 +172,48 @@ function App() {
             <button
               key=${t}
               onClick=${() => setType(t)}
-              class="px-2.5 py-1 rounded text-xs font-medium transition ${type === t ? 'bg-slate-100 text-slate-900' : 'bg-slate-900 text-slate-300 hover:bg-slate-800'}"
+              class="px-2.5 py-1 rounded text-xs font-medium transition ${type === t
+                ? 'bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900'
+                : 'bg-white text-zinc-700 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-800'}"
             >
               ${t}
-              <span class="ml-1 text-[10px] opacity-60">${counts[t] ?? 0}</span>
+              <span class="ml-1 text-[10px] opacity-60 mono">${counts[t] ?? 0}</span>
             </button>
           `)}
         </div>
         <select
           value=${sort}
           onChange=${(e) => setSort(e.currentTarget.value)}
-          class="bg-slate-900 border border-slate-800 rounded-md px-2 py-1.5 text-xs"
+          class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-2 py-1.5 text-xs"
         >
           ${SORTS.map((s) => html`<option key=${s.id} value=${s.id}>${s.label}</option>`)}
         </select>
+        <${ThemeToggle} theme=${theme} onToggle=${toggleTheme} />
       </header>
 
       <main class="flex-1 grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] overflow-hidden">
-        <section class="overflow-y-auto border-r border-slate-800">
-          ${loading && html`<div class="p-5 text-slate-500 text-sm">Loading…</div>`}
-          ${error && html`<div class="p-5 text-rose-400 text-sm">Failed to load: ${error}</div>`}
+        <section class="overflow-y-auto border-r border-zinc-200 dark:border-zinc-800">
+          ${loading && html`<div class="p-5 text-zinc-500 text-sm">Loading…</div>`}
+          ${error && html`<div class="p-5 text-rose-600 dark:text-rose-400 text-sm">Failed to load: ${error}</div>`}
           ${!loading && !error && filtered.length === 0 && html`
-            <div class="p-5 text-slate-500 text-sm">No items match.</div>
+            <div class="p-5 text-zinc-500 text-sm">No items match.</div>
           `}
-          <ul class="divide-y divide-slate-800/80">
+          <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
             ${filtered.map((it) => html`
               <li
                 key=${it.id}
                 onClick=${() => setSelected(it)}
-                class="px-4 py-3 cursor-pointer transition ${selected?.id === it.id ? 'bg-slate-800/60' : 'hover:bg-slate-900'}"
+                class="px-4 py-3 cursor-pointer transition border-l-2 ${selected?.id === it.id
+                  ? 'bg-amber-50 dark:bg-amber-500/10 border-l-amber-500'
+                  : 'hover:bg-zinc-100 dark:hover:bg-zinc-900 border-l-transparent'}"
               >
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 flex-wrap">
                   <${TypeChip} type=${it.type} />
                   <span class="font-medium text-sm truncate">${it.title || it.name}</span>
                   <${ScopeBadge} scope=${it.scope} />
                 </div>
-                <div class="mt-1 text-xs text-slate-400 line-clamp-2">${it.description}</div>
-                <div class="mt-1.5 flex gap-3 text-[11px] text-slate-500 mono">
+                <div class="mt-1 text-xs text-zinc-600 dark:text-zinc-400 line-clamp-2">${it.description}</div>
+                <div class="mt-1.5 flex gap-3 text-[11px] text-zinc-500 mono">
                   <span>${it.usage?.count ?? 0} uses</span>
                   <span>last ${relTime(it.usage?.last_ts)}</span>
                 </div>
@@ -173,51 +222,51 @@ function App() {
           </ul>
         </section>
 
-        <section class="overflow-y-auto">
+        <section class="overflow-y-auto bg-white dark:bg-zinc-900/40">
           ${selected ? html`
             <article class="p-6">
-              <div class="flex items-center gap-2 mb-1">
+              <div class="flex items-center gap-2 mb-2">
                 <${TypeChip} type=${selected.type} />
                 <${ScopeBadge} scope=${selected.scope} />
               </div>
               <h1 class="text-xl font-semibold tracking-tight">${selected.title || selected.name}</h1>
-              <p class="mt-2 text-sm text-slate-300 leading-relaxed">${selected.description}</p>
+              <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed">${selected.description}</p>
 
               <dl class="mt-6 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
                 <div>
-                  <dt class="text-[11px] uppercase tracking-wider text-slate-500">Uses</dt>
+                  <dt class="text-[11px] uppercase tracking-wider text-zinc-500">Uses</dt>
                   <dd class="mono">${selected.usage?.count ?? 0}</dd>
                 </div>
                 <div>
-                  <dt class="text-[11px] uppercase tracking-wider text-slate-500">Last used</dt>
+                  <dt class="text-[11px] uppercase tracking-wider text-zinc-500">Last used</dt>
                   <dd class="mono">${relTime(selected.usage?.last_ts)}</dd>
                 </div>
                 <div>
-                  <dt class="text-[11px] uppercase tracking-wider text-slate-500">Errors</dt>
+                  <dt class="text-[11px] uppercase tracking-wider text-zinc-500">Errors</dt>
                   <dd class="mono">${selected.usage?.errors ?? 0}</dd>
                 </div>
                 <div>
-                  <dt class="text-[11px] uppercase tracking-wider text-slate-500">Date added</dt>
+                  <dt class="text-[11px] uppercase tracking-wider text-zinc-500">Date added</dt>
                   <dd class="mono">${selected.date_added?.slice(0, 10) || '—'}</dd>
                 </div>
                 <div class="col-span-2">
-                  <dt class="text-[11px] uppercase tracking-wider text-slate-500">Source</dt>
-                  <dd class="mono text-xs break-all text-slate-300">${selected.source_path}</dd>
+                  <dt class="text-[11px] uppercase tracking-wider text-zinc-500">Source</dt>
+                  <dd class="mono text-xs break-all text-zinc-700 dark:text-zinc-400">${selected.source_path}</dd>
                 </div>
               </dl>
 
               ${selected.tags?.length ? html`
                 <div class="mt-4 flex flex-wrap gap-1">
-                  ${selected.tags.map((t) => html`<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px]">${t}</span>`)}
+                  ${selected.tags.map((t) => html`<span class="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 text-[11px] mono">${t}</span>`)}
                 </div>
               ` : null}
             </article>
-          ` : html`<div class="p-6 text-slate-500 text-sm">Select an item.</div>`}
+          ` : html`<div class="p-6 text-zinc-500 text-sm">Select an item.</div>`}
         </section>
       </main>
 
-      <footer class="border-t border-slate-800 px-5 py-2 text-[11px] text-slate-500 mono flex justify-between">
-        <span>${items.length} items · refreshes every 10s</span>
+      <footer class="border-t border-zinc-200 dark:border-zinc-800 px-5 py-2 text-[11px] text-zinc-500 mono flex justify-between">
+        <span>${items.length} items · ${totalUses.toLocaleString()} total uses · refreshes every 10s</span>
         <span>${scannedAt ? `scanned ${new Date(scannedAt).toLocaleTimeString()}` : ''}</span>
       </footer>
     </div>
