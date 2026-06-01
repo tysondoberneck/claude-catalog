@@ -401,12 +401,6 @@ function App() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    // Plugin-provided items are anything whose scope is plugin:<name> OR a
-    // external orphan whose name is namespaced as `plugin:thing` (these are
-    // skills/commands from a plugin whose source isn't in the current scan).
-    const fromPlugin = (it) =>
-      it.scope?.startsWith?.('plugin:') ||
-      (it.scope === 'external' && typeof it.name === 'string' && it.name.includes(':'));
     let out = items.filter((it) => {
       // Built-in Claude Code commands are hidden by default — they clutter the
       // catalog with `/clear`, `/compact`, etc. that aren't really "installed
@@ -420,9 +414,6 @@ function App() {
         // catalog stays focused on what you actually use right now.
         if (stale) return false;
         if (type !== 'all' && it.type !== type) return false;
-        // Skill/command/mcp views show only user- or project-scoped items;
-        // plugin-provided children live under the plugin filter, not here.
-        if ((type === 'skill' || type === 'command' || type === 'mcp') && fromPlugin(it)) return false;
       }
       if (!q) return true;
       return (
@@ -460,9 +451,6 @@ function App() {
     // Type-pill counts only include items inside the activity window so the
     // numbers match what the user actually sees in the list.
     const c = { all: 0, skill: 0, command: 0, mcp: 0, plugin: 0, stale: 0 };
-    const fromPlugin = (it) =>
-      it.scope?.startsWith?.('plugin:') ||
-      (it.scope === 'external' && typeof it.name === 'string' && it.name.includes(':'));
     for (const it of items) {
       // Mirror the filter: hide built-ins from counts unless opted in.
       if (!showBuiltins && it.scope === 'builtin') continue;
@@ -470,12 +458,7 @@ function App() {
         c.stale += 1;
       } else {
         c.all += 1;
-        // Plugin-provided skills/commands/mcps count toward the plugin pill
-        // only — they're listed inside their parent plugin, not in the
-        // standalone skill/command/mcp views.
-        if (it.type === 'plugin' || !fromPlugin(it)) {
-          c[it.type] = (c[it.type] ?? 0) + 1;
-        }
+        c[it.type] = (c[it.type] ?? 0) + 1;
       }
     }
     return c;
