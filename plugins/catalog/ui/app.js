@@ -353,20 +353,19 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
-  // Search + type filter only (no activity window). Tree view uses this so
-  // expanding a plugin shows ALL its children, not just in-window ones.
-  const searchTypeFiltered = useMemo(() => {
+  // Search filter only (no type, no window). Tree view uses this so plugin
+  // headers and their children always group correctly regardless of which
+  // type pill is active — the type filter is applied at the leaf level
+  // inside renderTree so children counts reflect the full inventory.
+  const searchFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return items.filter((it) => {
-      if (type !== 'all' && type !== 'stale' && it.type !== type) return false;
-      if (!q) return true;
-      return (
-        it.name?.toLowerCase().includes(q) ||
-        it.title?.toLowerCase().includes(q) ||
-        it.description?.toLowerCase().includes(q)
-      );
-    });
-  }, [items, query, type]);
+    if (!q) return items;
+    return items.filter((it) =>
+      it.name?.toLowerCase().includes(q) ||
+      it.title?.toLowerCase().includes(q) ||
+      it.description?.toLowerCase().includes(q)
+    );
+  }, [items, query]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -425,10 +424,17 @@ function App() {
     [items],
   );
 
-  // Tree view groups from search/type-filtered items only — ignoring the
-  // activity window so expanding a plugin reveals its full contents even
-  // when most children haven't been used recently.
-  const groups = useMemo(() => buildGroups(searchTypeFiltered, cwd), [searchTypeFiltered, cwd]);
+  // Tree view groups from the search-only filtered list — the type filter is
+  // applied to leaves inside renderTree so plugin headers and their child
+  // counts always reflect the full inventory.
+  const groups = useMemo(() => buildGroups(searchFiltered, cwd), [searchFiltered, cwd]);
+
+  // Predicate for leaf-level filtering inside the tree view.
+  function leafVisible(it) {
+    if (type === 'stale') return isStaleForWindow(it, windowDays);
+    if (type !== 'all' && it.type !== type) return false;
+    return true;
+  }
 
   function renderFlat() {
     return html`
@@ -446,12 +452,24 @@ function App() {
   }
 
   function renderTree() {
+    // Apply the type filter at the leaf level. Plugin parents show all
+    // children counts of the visible kind. When the type filter is "plugin",
+    // we don't restrict children (browsing what's inside a plugin makes more
+    // sense than hiding everything).
+    const visibleChildrenOf = (g) => g.children.filter((c) => type === 'plugin' || leafVisible(c));
+    const groupsToShow = groups.pluginGroups
+      .map((g) => ({ ...g, visibleChildren: visibleChildrenOf(g) }))
+      .filter((g) => type === 'all' || type === 'plugin' || g.visibleChildren.length > 0);
+
+    const userItemsVisible   = type === 'plugin' ? [] : groups.userItems.filter(leafVisible);
+    const projectItemsVisible = type === 'plugin' ? [] : groups.projectItems.filter(leafVisible);
+
     return html`
       <div>
-        ${groups.pluginGroups.length ? html`
+        ${groupsToShow.length ? html`
           <div class="px-4 pt-3 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">Installed plugins</div>
           <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
-            ${groups.pluginGroups.map((g) => html`
+            ${groupsToShow.map((g) => html`
               <li key=${g.name}>
                 <div
                   onClick=${() => { setSelected(g.parent); togglePlugin(g.name); }}
@@ -462,11 +480,11 @@ function App() {
                   <span class="text-zinc-500 mono text-xs w-3 inline-block">${expanded.has(g.name) ? '▾' : '▸'}</span>
                   <${TypeChip} type="plugin" />
                   <span class="font-medium text-sm">${g.parent.title || g.parent.name}</span>
-                  <span class="text-[11px] text-zinc-500 mono ml-auto">${g.children.length} items · ${g.parent.usage?.count ?? 0} uses</span>
+                  <span class="text-[11px] text-zinc-500 mono ml-auto">${g.visibleChildren.length} items · ${g.parent.usage?.count ?? 0} uses</span>
                 </div>
-                ${expanded.has(g.name) && g.children.length > 0 && html`
+                ${expanded.has(g.name) && g.visibleChildren.length > 0 && html`
                   <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70 bg-zinc-50/50 dark:bg-zinc-900/40">
-                    ${g.children.map((c) => html`
+                    ${g.visibleChildren.map((c) => html`
                       <${ItemRow}
                         key=${c.id}
                         item=${c}
@@ -482,19 +500,19 @@ function App() {
           </ul>
         ` : null}
 
-        ${groups.userItems.length ? html`
+        ${userItemsVisible.length ? html`
           <div class="px-4 pt-4 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">User</div>
           <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
-            ${groups.userItems.map((it) => html`
+            ${userItemsVisible.map((it) => html`
               <${ItemRow} key=${it.id} item=${it} selected=${selected?.id === it.id} onSelect=${setSelected} />
             `)}
           </ul>
         ` : null}
 
-        ${groups.projectItems.length ? html`
+        ${projectItemsVisible.length ? html`
           <div class="px-4 pt-4 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">${groups.projectLabel}</div>
           <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
-            ${groups.projectItems.map((it) => html`
+            ${projectItemsVisible.map((it) => html`
               <${ItemRow} key=${it.id} item=${it} selected=${selected?.id === it.id} onSelect=${setSelected} />
             `)}
           </ul>
