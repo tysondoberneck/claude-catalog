@@ -141,24 +141,67 @@ async function walkCommandsDir(dir, ctx, depth = 0) {
   return out;
 }
 
-async function readMcpServersFromConfig(file, { scope, pluginNamespace = null }) {
+function describeMcp(cfg) {
+  if (cfg?.command) {
+    const args = cfg.args ? ' ' + (Array.isArray(cfg.args) ? cfg.args.join(' ') : cfg.args) : '';
+    return `MCP server (stdio). \`${cfg.command}${args}\``;
+  }
+  if (cfg?.url) return `MCP server (${cfg.type || 'http'}). ${cfg.url}`;
+  return 'MCP server.';
+}
+
+// `mcp:` ids must match what hooks emit. Hooks extract the server name from
+// tool calls like `mcp__<server>__<tool>` — since the wire format can't
+// contain colons, plugin-namespaced servers come through as
+// `plugin_<plugin>_<server>`. Mirror that here so the catalog's id matches.
+function mcpIdFor(server, pluginNamespace) {
+  return pluginNamespace ? `mcp:plugin_${pluginNamespace}_${server}` : `mcp:${server}`;
+}
+function mcpDisplayFor(server, pluginNamespace) {
+  return pluginNamespace ? `plugin:${pluginNamespace}:${server}` : server;
+}
+
+function mcpServersToItems(serversObj, { scope, pluginNamespace = null, source_path, date_added }) {
+  return Object.entries(serversObj).map(([server, cfg]) => {
+    const display = mcpDisplayFor(server, pluginNamespace);
+    return {
+      id: mcpIdFor(server, pluginNamespace),
+      type: 'mcp',
+      scope,
+      name: display,
+      title: display,
+      description: describeMcp(cfg),
+      source_path,
+      date_added,
+      tags: pluginNamespace ? [`plugin:${pluginNamespace}`] : [],
+    };
+  });
+}
+
+async function readMcpServersFromConfig(file, ctx) {
   const json = await safeReadJSON(file);
   if (!json || !json.mcpServers || typeof json.mcpServers !== 'object') return [];
   const st = await safeStat(file);
-  const date_added = dateFromStat(st);
-  return Object.entries(json.mcpServers).map(([server, cfg]) => ({
-    id: `mcp:${server}`,
-    type: 'mcp',
-    scope,
-    name: server,
-    title: server,
-    description: cfg?.command
-      ? `MCP server. Command: \`${cfg.command}${cfg.args ? ' ' + (Array.isArray(cfg.args) ? cfg.args.join(' ') : cfg.args) : ''}\``
-      : 'MCP server.',
+  return mcpServersToItems(json.mcpServers, {
+    ...ctx,
     source_path: file,
-    date_added,
-    tags: pluginNamespace ? [`plugin:${pluginNamespace}`] : [],
-  }));
+    date_added: dateFromStat(st),
+  });
+}
+
+// ~/.claude.json holds per-project MCP configuration under projects[<path>].
+// Read just the current cwd's entry — that's where things like the Slack MCP
+// in this user's setup live.
+async function readProjectScopedMcpFromUserConfig(cwd) {
+  const cfg = await safeReadJSON(USER_CONFIG);
+  const servers = cfg?.projects?.[cwd]?.mcpServers;
+  if (!servers || typeof servers !== 'object') return [];
+  const st = await safeStat(USER_CONFIG);
+  return mcpServersToItems(servers, {
+    scope: 'project',
+    source_path: USER_CONFIG,
+    date_added: dateFromStat(st),
+  });
 }
 
 async function scanInstalledPlugin(pluginRoot, pluginName, version) {
@@ -248,6 +291,9 @@ async function scanProjectScope(cwd) {
   if (existsSync(join(projDir, 'settings.local.json'))) {
     out.push(...(await readMcpServersFromConfig(join(projDir, 'settings.local.json'), { scope: 'project' })));
   }
+  // Per-project MCP servers configured via `claude mcp add` land in
+  // ~/.claude.json under projects[<cwd>].mcpServers (e.g. Slack in this setup).
+  out.push(...(await readProjectScopedMcpFromUserConfig(cwd)));
   return out;
 }
 

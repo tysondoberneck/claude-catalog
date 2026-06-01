@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { scanInventory } from './scanner.mjs';
 import { aggregateByItem } from './storage.mjs';
 import { aggregateFromHistory } from './history.mjs';
+import { aggregateFromSkillUsage } from './skill-usage.mjs';
 import { addDaily, emptyDaily } from './time.mjs';
 
 function mergeUsage(a, b) {
@@ -79,12 +80,26 @@ async function handleApiItems(req, res) {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const cwd = url.searchParams.get('cwd') || process.cwd();
 
-  const [inventory, liveUsage, historicalUsage] = await Promise.all([
+  const [inventory, liveUsage, historicalUsage, skillUsage] = await Promise.all([
     scanInventory({ cwd }),
     aggregateByItem(),
     aggregateFromHistory(),
+    aggregateFromSkillUsage(),
   ]);
   const usage = mergeUsage(historicalUsage, liveUsage);
+
+  // For skill ids, override count + last_ts with Claude Code's own skillUsage
+  // tracking (the canonical source). Keep the session-derived daily[] for the
+  // sparkline since skillUsage doesn't break down by day.
+  for (const [id, su] of skillUsage) {
+    const existing = usage.get(id);
+    usage.set(id, {
+      count: su.count,
+      last_ts: Math.max(su.last_ts, existing?.last_ts ?? 0),
+      errors: existing?.errors ?? 0,
+      daily: existing?.daily ?? emptyDaily(),
+    });
+  }
 
   const items = inventory.map((item) => {
     let u = usage.get(item.id);
