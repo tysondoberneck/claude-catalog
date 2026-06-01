@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "catalog",
-      "source": ".",
+      "source": "./plugins/catalog",
       "description": "Browse and search every skill, MCP tool, plugin, and slash command installed in your Claude Code environment, with automatic usage tracking."
     }
   ]

@@ -14,7 +14,7 @@ Run the launcher script. It will:
 Use the absolute path to the script (resolved from the plugin's own directory) so it works regardless of the user's current working directory.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/catalog}/scripts/ensure-running.mjs"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ensure-running.mjs"
 ```
 
 After running, briefly tell the user the URL the UI opened at (read it from the script's stdout). Do not do anything else.
