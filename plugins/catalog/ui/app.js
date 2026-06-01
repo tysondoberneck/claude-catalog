@@ -54,6 +54,9 @@ function ScopeBadge({ scope }) {
   if (scope === 'project') {
     return html`<span class="px-1.5 py-0.5 rounded ring-1 ring-rose-500/40 text-rose-700 dark:text-rose-300 text-[10px] font-medium uppercase tracking-wider mono">project</span>`;
   }
+  if (scope === 'discovered') {
+    return html`<span class="px-1.5 py-0.5 rounded ring-1 ring-zinc-400/60 text-zinc-500 dark:text-zinc-400 text-[10px] font-medium uppercase tracking-wider mono" title="Used historically but the source file was not found in the current scan">discovered</span>`;
+  }
   if (scope?.startsWith?.('plugin:')) {
     return html`<span class="px-1.5 py-0.5 rounded bg-zinc-200/70 dark:bg-zinc-800/70 text-zinc-600 dark:text-zinc-400 text-[10px] mono">${scope}</span>`;
   }
@@ -539,13 +542,15 @@ function App() {
                   <dt class="text-[11px] uppercase tracking-wider text-zinc-500">Date added</dt>
                   <dd class="mono">${selected.date_added?.slice(0, 10) || '—'}</dd>
                 </div>
-                <div class="col-span-2">
-                  <dt class="text-[11px] uppercase tracking-wider text-zinc-500">Source</dt>
-                  <dd class="mt-1 space-y-2">
-                    <div class="mono text-xs break-all text-zinc-700 dark:text-zinc-400">${selected.source_path}</div>
-                    <${EditorLinks} path=${selected.source_path} />
-                  </dd>
-                </div>
+                ${selected.source_path ? html`
+                  <div class="col-span-2">
+                    <dt class="text-[11px] uppercase tracking-wider text-zinc-500">Source</dt>
+                    <dd class="mt-1 space-y-2">
+                      <div class="mono text-xs break-all text-zinc-700 dark:text-zinc-400">${selected.source_path}</div>
+                      <${EditorLinks} path=${selected.source_path} />
+                    </dd>
+                  </div>
+                ` : null}
               </dl>
 
               ${selected.tags?.length ? html`
@@ -554,7 +559,7 @@ function App() {
                 </div>
               ` : null}
 
-              <${SourceBody} id=${selected.id} />
+              ${selected.source_path && html`<${SourceBody} id=${selected.id} />`}
             </article>
           ` : html`<div class="p-6 text-zinc-500 text-sm">Select an item.</div>`}
         </section>

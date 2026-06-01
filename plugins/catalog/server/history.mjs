@@ -65,30 +65,64 @@ async function scanHistory(map) {
 }
 
 async function scanSessionFile(file, map) {
+  // Skill activation can be signalled two ways in a session transcript:
+  //   1. Explicit `Skill` tool_use block — when the user typed /<skill-name>.
+  //   2. `attributionSkill` field on an assistant message — when Claude
+  //      auto-triggered the skill from its description without an explicit
+  //      tool call. This is the dominant case (~50× more common in practice).
+  //
+  // The same skill stays attributed across many consecutive messages, so we
+  // track `currentSkill` per-session and bump only on TRANSITIONS — the moment
+  // attribution changes to a new skill, or from null to a skill. That makes
+  // one activation count as one use even if it spans many assistant messages.
+  let currentSkill = null;
+
   for await (const line of await streamLines(file)) {
     if (!line) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
-    // Only assistant messages carry tool_use blocks.
-    const content = entry.message?.content;
-    if (!Array.isArray(content)) continue;
+
     const tsRaw = entry.timestamp;
     const ts = tsRaw ? Date.parse(tsRaw) : 0;
     if (!ts) continue;
 
-    for (const block of content) {
-      if (block.type !== 'tool_use') continue;
-      const name = block.name;
-      if (!name) continue;
+    // MCP and explicit Skill tool calls live in the message content blocks.
+    const role = entry.message?.role;
+    const content = entry.message?.content;
+    let skillFromTool = null;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block.type !== 'tool_use') continue;
+        const name = block.name;
+        if (!name) continue;
 
-      const mcpId = mcpItemId(name);
-      if (mcpId) {
-        bump(map, mcpId, ts);
-        continue;
+        const mcpId = mcpItemId(name);
+        if (mcpId) {
+          bump(map, mcpId, ts);
+          continue;
+        }
+        if (name === 'Skill') {
+          const skill = block.input?.skill;
+          if (skill) skillFromTool = skill;
+        }
       }
-      if (name === 'Skill') {
-        const skill = block.input?.skill;
-        if (skill) bump(map, `skill:${skill}`, ts);
+    }
+
+    // Skill activation tracking only fires on assistant messages so a user
+    // follow-up mid-run doesn't reset currentSkill and double-count.
+    // attributionSkill values use the same full form as inventory ids
+    // (`<plugin>:<skill>` for plugin skills, bare `<skill>` for user/project).
+    if (role === 'assistant') {
+      const attribution = entry.attributionSkill || null;
+      const skillName = skillFromTool || attribution;
+      if (skillName) {
+        const id = `skill:${skillName}`;
+        if (id !== currentSkill) {
+          bump(map, id, ts);
+          currentSkill = id;
+        }
+      } else {
+        currentSkill = null;
       }
     }
   }

@@ -115,6 +115,43 @@ async function handleApiItems(req, res) {
     };
   });
 
+  // Surface usage data even when no inventory item backs it. This happens
+  // when:
+  //   - the active cwd's project skills/commands don't match the session
+  //     that recorded the usage,
+  //   - a plugin is in the cache without an .in_use marker so the scanner
+  //     skipped it, or
+  //   - the source has been uninstalled or moved.
+  // Without this, real activity stays invisible.
+  const seenIds = new Set(items.map((it) => it.id));
+  const knownPrefixes = new Set(['skill', 'command', 'mcp', 'plugin']);
+  for (const [id, u] of usage) {
+    if (seenIds.has(id)) continue;
+    const colon = id.indexOf(':');
+    if (colon < 0) continue;
+    const type = id.slice(0, colon);
+    if (!knownPrefixes.has(type)) continue;
+    // For MCP, skip per-tool ids that already rolled up into an existing
+    // server item — they'd otherwise appear here individually.
+    if (type === 'mcp' && id.split(':').length > 2) {
+      const serverId = id.split(':').slice(0, 2).join(':');
+      if (seenIds.has(serverId)) continue;
+    }
+    const name = id.slice(colon + 1);
+    items.push({
+      id,
+      type,
+      scope: 'discovered',
+      name,
+      title: name,
+      description: 'Discovered from usage data. The source file for this item was not found in the current scan — it may belong to another project or an inactive plugin.',
+      source_path: null,
+      date_added: null,
+      tags: ['discovered'],
+      usage: { count: u.count, last_ts: u.last_ts, errors: u.errors, daily: u.daily ?? emptyDaily() },
+    });
+  }
+
   rememberCwd(cwd, items);
   json(res, 200, { items, scanned_at: Date.now(), cwd });
 }
