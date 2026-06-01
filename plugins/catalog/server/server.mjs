@@ -8,25 +8,14 @@ import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { scanInventory } from './scanner.mjs';
-import { aggregateByItem } from './storage.mjs';
 import { aggregateFromHistory } from './history.mjs';
 import { aggregateFromSkillUsage } from './skill-usage.mjs';
 import { addDaily, emptyDaily } from './time.mjs';
 
-function mergeUsage(a, b) {
+function cloneUsage(map) {
   const out = new Map();
-  for (const [id, v] of a) {
+  for (const [id, v] of map) {
     out.set(id, { count: v.count, last_ts: v.last_ts, errors: v.errors, daily: [...(v.daily ?? emptyDaily())] });
-  }
-  for (const [id, v] of b) {
-    const cur = out.get(id) ?? { count: 0, last_ts: 0, errors: 0, daily: emptyDaily() };
-    addDaily(cur.daily, v.daily);
-    out.set(id, {
-      count: cur.count + v.count,
-      last_ts: Math.max(cur.last_ts, v.last_ts),
-      errors: cur.errors + v.errors,
-      daily: cur.daily,
-    });
   }
   return out;
 }
@@ -80,17 +69,22 @@ async function handleApiItems(req, res) {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const cwd = url.searchParams.get('cwd') || process.cwd();
 
-  const [inventory, liveUsage, historicalUsage, skillUsage] = await Promise.all([
+  // The catalog is read-only against files Claude Code maintains on its own:
+  //   - aggregateFromHistory mines ~/.claude/history.jsonl (slash commands)
+  //     and ~/.claude/projects/*/*.jsonl (per-tool events, attributionSkill
+  //     for auto-triggered skills). Produces {count, last_ts, errors, daily[]}.
+  //   - aggregateFromSkillUsage reads ~/.claude.json:skillUsage which is
+  //     Claude Code's own canonical per-skill aggregate.
+  const [inventory, historicalUsage, skillUsage] = await Promise.all([
     scanInventory({ cwd }),
-    aggregateByItem(),
     aggregateFromHistory(),
     aggregateFromSkillUsage(),
   ]);
-  const usage = mergeUsage(historicalUsage, liveUsage);
+  const usage = cloneUsage(historicalUsage);
 
-  // For skill ids, override count + last_ts with Claude Code's own skillUsage
-  // tracking (the canonical source). Keep the session-derived daily[] for the
-  // sparkline since skillUsage doesn't break down by day.
+  // For skill ids, override count + last_ts with skillUsage (canonical).
+  // Keep the session-derived daily[] for the sparkline since skillUsage
+  // doesn't break down by day.
   for (const [id, su] of skillUsage) {
     const existing = usage.get(id);
     usage.set(id, {
@@ -104,7 +98,7 @@ async function handleApiItems(req, res) {
   const items = inventory.map((item) => {
     let u = usage.get(item.id);
     // MCP server items: roll up per-tool events (id "mcp:<server>:<tool>") to
-    // the server-level item. Events are emitted per-tool by the hooks but the
+    // the server-level item. Per-tool calls live in session transcripts; the
     // catalog displays one item per server with aggregate stats.
     if (item.type === 'mcp') {
       const prefix = item.id + ':';
