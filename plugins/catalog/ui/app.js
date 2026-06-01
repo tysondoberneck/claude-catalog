@@ -21,12 +21,20 @@ const CHIP_BY_TYPE = {
   stale:   'ring-rose-500/40     text-rose-700     dark:text-rose-300',
 };
 
-const STALE_MS = 60 * 24 * 60 * 60 * 1000;
+const WINDOWS = [
+  { id: '7',   label: 'Last 7 days',  days: 7 },
+  { id: '14',  label: 'Last 14 days', days: 14 },
+  { id: '30',  label: 'Last 30 days', days: 30 },
+  { id: '90',  label: 'Last 90 days', days: 90 },
+  { id: '180', label: 'Last 6 months', days: 180 },
+  { id: 'all', label: 'All time',     days: Infinity },
+];
 
-function isStale(item) {
+function isStaleForWindow(item, days) {
+  if (!Number.isFinite(days)) return false; // "all time" — nothing is stale
   const last = item.usage?.last_ts ?? 0;
   if (last === 0) return true;
-  return Date.now() - last > STALE_MS;
+  return Date.now() - last > days * 24 * 60 * 60 * 1000;
 }
 
 function relTime(ts) {
@@ -292,6 +300,8 @@ function App() {
     try { return new Set(JSON.parse(localStorage.getItem('catalog.expanded') || '[]')); }
     catch { return new Set(); }
   });
+  const [windowId, setWindowId] = useState(localStorage.getItem('catalog.window') || '14');
+  const windowDays = (WINDOWS.find((w) => w.id === windowId) ?? WINDOWS[1]).days;
 
   function toggleTheme() {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -311,10 +321,13 @@ function App() {
     try { localStorage.setItem('catalog.expanded', JSON.stringify([...next])); } catch (_) {}
   }
 
-  // Persist sort + auto-switch sort when stale is active.
+  // Persist sort + window + auto-switch sort when stale is active.
   useEffect(() => {
     try { localStorage.setItem('catalog.sort', sort); } catch (_) {}
   }, [sort]);
+  useEffect(() => {
+    try { localStorage.setItem('catalog.window', windowId); } catch (_) {}
+  }, [windowId]);
   useEffect(() => {
     if (type === 'stale' && sort !== 'date_added') setSort('date_added');
   }, [type]);
@@ -343,10 +356,14 @@ function App() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     let out = items.filter((it) => {
+      const stale = isStaleForWindow(it, windowDays);
       if (type === 'stale') {
-        if (!isStale(it)) return false;
-      } else if (type !== 'all') {
-        if (it.type !== type) return false;
+        if (!stale) return false;
+      } else {
+        // Non-stale views hide items outside the activity window so the
+        // catalog stays focused on what you actually use right now.
+        if (stale) return false;
+        if (type !== 'all' && it.type !== type) return false;
       }
       if (!q) return true;
       return (
@@ -363,7 +380,7 @@ function App() {
       return (a.name ?? '').localeCompare(b.name ?? '');
     });
     return out;
-  }, [items, query, type, sort]);
+  }, [items, query, type, sort, windowDays]);
 
   useEffect(() => {
     if (!selected && filtered.length) setSelected(filtered[0]);
@@ -371,13 +388,19 @@ function App() {
   }, [filtered]);
 
   const counts = useMemo(() => {
-    const c = { all: items.length, skill: 0, command: 0, mcp: 0, plugin: 0, stale: 0 };
+    // Type-pill counts only include items inside the activity window so the
+    // numbers match what the user actually sees in the list.
+    const c = { all: 0, skill: 0, command: 0, mcp: 0, plugin: 0, stale: 0 };
     for (const it of items) {
-      c[it.type] = (c[it.type] ?? 0) + 1;
-      if (isStale(it)) c.stale += 1;
+      if (isStaleForWindow(it, windowDays)) {
+        c.stale += 1;
+      } else {
+        c.all += 1;
+        c[it.type] = (c[it.type] ?? 0) + 1;
+      }
     }
     return c;
-  }, [items]);
+  }, [items, windowDays]);
 
   const totalUses = useMemo(
     () => items.reduce((acc, it) => acc + (it.usage?.count ?? 0), 0),
@@ -489,6 +512,14 @@ function App() {
           `)}
         </div>
         <select
+          value=${windowId}
+          onChange=${(e) => setWindowId(e.currentTarget.value)}
+          title="Activity window — items unused beyond this are stale"
+          class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-2 py-1.5 text-xs"
+        >
+          ${WINDOWS.map((w) => html`<option key=${w.id} value=${w.id}>${w.label}</option>`)}
+        </select>
+        <select
           value=${sort}
           onChange=${(e) => setSort(e.currentTarget.value)}
           class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-2 py-1.5 text-xs"
@@ -515,7 +546,7 @@ function App() {
               <div class="flex items-center gap-2 mb-2">
                 <${TypeChip} type=${selected.type} />
                 <${ScopeBadge} scope=${selected.scope} />
-                ${isStale(selected) && html`<${TypeChip} type="stale" />`}
+                ${isStaleForWindow(selected, windowDays) && html`<${TypeChip} type="stale" />`}
               </div>
               <h1 class="text-xl font-semibold tracking-tight">${selected.title || selected.name}</h1>
               <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed">${selected.description}</p>
@@ -566,7 +597,7 @@ function App() {
       </main>
 
       <footer class="border-t border-zinc-200 dark:border-zinc-800 px-5 py-2 text-[11px] text-zinc-500 mono flex justify-between">
-        <span>${items.length} items · ${totalUses.toLocaleString()} total uses · ${counts.stale} stale · refreshes every 10s</span>
+        <span>${counts.all} active in ${(WINDOWS.find(w => w.id === windowId) ?? WINDOWS[1]).label.toLowerCase()} · ${counts.stale} stale · ${items.length} total · ${totalUses.toLocaleString()} uses</span>
         <span>${scannedAt ? `scanned ${new Date(scannedAt).toLocaleTimeString()}` : ''}</span>
       </footer>
     </div>
