@@ -7,7 +7,11 @@
   "plugins": [
     {
       "name": "catalog",
-      "source": "./plugins/catalog",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/tysondoberneck/claude-catalog.git",
+        "path": "plugins/catalog"
+      },
       "description": "Browse and search every skill, MCP tool, plugin, and slash command installed in your Claude Code environment, with automatic usage tracking."
     }
   ]
