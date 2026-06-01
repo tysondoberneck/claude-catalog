@@ -137,7 +137,10 @@ function EditorLinks({ path }) {
 // --- Source body lazy loader ---
 function SourceBody({ id }) {
   const [state, setState] = useState({ status: 'idle' });
-  const [open, setOpen] = useState(false);
+  // Default open — the rendered markdown is usually the most useful part of
+  // the detail pane, so don't hide it behind a click. Users can collapse if
+  // they want a shorter pane.
+  const [open, setOpen] = useState(true);
 
   useEffect(() => {
     if (!open || state.status !== 'idle') return;
@@ -153,10 +156,11 @@ function SourceBody({ id }) {
     return () => { cancelled = true; };
   }, [open, id]);
 
-  // Reset state when item changes
+  // Reset state when item changes, keeping the pane open so the new item's
+  // body loads immediately.
   useEffect(() => {
     setState({ status: 'idle' });
-    setOpen(false);
+    setOpen(true);
   }, [id]);
 
   const rendered = useMemo(() => {
