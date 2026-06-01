@@ -65,8 +65,8 @@ function ScopeBadge({ scope }) {
   if (scope === 'builtin') {
     return html`<span class="px-1.5 py-0.5 rounded ring-1 ring-zinc-400/60 text-zinc-500 dark:text-zinc-400 text-[10px] font-medium uppercase tracking-wider mono" title="Built-in Claude Code command">built-in</span>`;
   }
-  if (scope === 'discovered') {
-    return html`<span class="px-1.5 py-0.5 rounded ring-1 ring-zinc-400/60 text-zinc-500 dark:text-zinc-400 text-[10px] font-medium uppercase tracking-wider mono" title="Used historically but the source file was not found in the current scan">discovered</span>`;
+  if (scope === 'external') {
+    return html`<span class="px-1.5 py-0.5 rounded ring-1 ring-zinc-400/60 text-zinc-500 dark:text-zinc-400 text-[10px] font-medium uppercase tracking-wider mono" title="Used here but the source file isn't in the current scan — likely from another project or an uninstalled plugin.">external</span>`;
   }
   if (scope?.startsWith?.('plugin:')) {
     return html`<span class="px-1.5 py-0.5 rounded bg-zinc-200/70 dark:bg-zinc-800/70 text-zinc-600 dark:text-zinc-400 text-[10px] mono">${scope}</span>`;
@@ -75,7 +75,7 @@ function ScopeBadge({ scope }) {
 }
 
 function isOrphan(item) {
-  return item.scope === 'builtin' || item.scope === 'discovered';
+  return item.scope === 'builtin' || item.scope === 'external';
 }
 
 // --- Sparkline ---
@@ -230,7 +230,7 @@ function ViewModeToggle({ viewMode, onToggle }) {
 
 // --- Row used in both flat and tree modes ---
 function ItemRow({ item, selected, onSelect, indent = 0 }) {
-  // For orphans (built-in / discovered) we skip the description line — the
+  // For orphans (built-in / external) we skip the description line — the
   // text is boilerplate and just adds visual noise across many rows.
   const showDesc = !isOrphan(item) && item.description;
   return html`
@@ -398,11 +398,11 @@ function App() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     // Plugin-provided items are anything whose scope is plugin:<name> OR a
-    // discovered orphan whose name is namespaced as `plugin:thing` (these are
+    // external orphan whose name is namespaced as `plugin:thing` (these are
     // skills/commands from a plugin whose source isn't in the current scan).
     const fromPlugin = (it) =>
       it.scope?.startsWith?.('plugin:') ||
-      (it.scope === 'discovered' && typeof it.name === 'string' && it.name.includes(':'));
+      (it.scope === 'external' && typeof it.name === 'string' && it.name.includes(':'));
     let out = items.filter((it) => {
       // Built-in Claude Code commands are hidden by default — they clutter the
       // catalog with `/clear`, `/compact`, etc. that aren't really "installed
@@ -458,7 +458,7 @@ function App() {
     const c = { all: 0, skill: 0, command: 0, mcp: 0, plugin: 0, stale: 0 };
     const fromPlugin = (it) =>
       it.scope?.startsWith?.('plugin:') ||
-      (it.scope === 'discovered' && typeof it.name === 'string' && it.name.includes(':'));
+      (it.scope === 'external' && typeof it.name === 'string' && it.name.includes(':'));
     for (const it of items) {
       // Mirror the filter: hide built-ins from counts unless opted in.
       if (!showBuiltins && it.scope === 'builtin') continue;

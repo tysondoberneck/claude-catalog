@@ -13,9 +13,9 @@ import { aggregateFromSkillUsage } from './skill-usage.mjs';
 import { addDaily, emptyDaily } from './time.mjs';
 
 // Claude Code's built-in slash commands. These show up in history.jsonl just
-// like user/plugin commands, so without this list they orphan as "discovered"
+// like user/plugin commands, so without this list they orphan as "external"
 // items and drown out real installed content. Keep conservative — anything
-// missing here just stays a discovered orphan, which the user can still opt
+// missing here just stays an external orphan, which the user can still opt
 // to view.
 const BUILTIN_COMMANDS = new Set([
   'add-dir', 'agents', 'bashes', 'bug', 'clear', 'compact', 'config',
@@ -191,15 +191,15 @@ async function handleApiItems(req, res) {
     items.push({
       id,
       type,
-      scope: isBuiltin ? 'builtin' : 'discovered',
+      scope: isBuiltin ? 'builtin' : 'external',
       name,
       title: name,
       description: isBuiltin
         ? 'Built-in Claude Code command.'
-        : 'Source not found in current scan.',
+        : 'Used here but lives outside the current project/install.',
       source_path: null,
       date_added: null,
-      tags: isBuiltin ? ['builtin'] : ['discovered'],
+      tags: isBuiltin ? ['builtin'] : ['external'],
       usage: { count: u.count, last_ts: u.last_ts, errors: u.errors, daily: u.daily ?? emptyDaily() },
     });
   }
