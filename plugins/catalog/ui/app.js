@@ -62,6 +62,9 @@ function ScopeBadge({ scope }) {
   if (scope === 'project') {
     return html`<span class="px-1.5 py-0.5 rounded ring-1 ring-rose-500/40 text-rose-700 dark:text-rose-300 text-[10px] font-medium uppercase tracking-wider mono">project</span>`;
   }
+  if (scope === 'builtin') {
+    return html`<span class="px-1.5 py-0.5 rounded ring-1 ring-zinc-400/60 text-zinc-500 dark:text-zinc-400 text-[10px] font-medium uppercase tracking-wider mono" title="Built-in Claude Code command">built-in</span>`;
+  }
   if (scope === 'discovered') {
     return html`<span class="px-1.5 py-0.5 rounded ring-1 ring-zinc-400/60 text-zinc-500 dark:text-zinc-400 text-[10px] font-medium uppercase tracking-wider mono" title="Used historically but the source file was not found in the current scan">discovered</span>`;
   }
@@ -69,6 +72,10 @@ function ScopeBadge({ scope }) {
     return html`<span class="px-1.5 py-0.5 rounded bg-zinc-200/70 dark:bg-zinc-800/70 text-zinc-600 dark:text-zinc-400 text-[10px] mono">${scope}</span>`;
   }
   return null;
+}
+
+function isOrphan(item) {
+  return item.scope === 'builtin' || item.scope === 'discovered';
 }
 
 // --- Sparkline ---
@@ -158,8 +165,10 @@ function SourceBody({ id }) {
   }, [state]);
 
   return html`
-    <details class="mt-6 border-t border-zinc-200 dark:border-zinc-800 pt-4" open=${open} onToggle=${(e) => setOpen(e.currentTarget.open)}>
-      <summary class="cursor-pointer text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 select-none">View source</summary>
+    <details open=${open} onToggle=${(e) => setOpen(e.currentTarget.open)}>
+      <summary class="cursor-pointer text-[11px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 select-none inline-flex items-center gap-1">
+        <span class="mono">${open ? '▾' : '▸'}</span> View source
+      </summary>
       <div class="mt-3">
         ${state.status === 'loading' && html`<div class="text-xs text-zinc-500">Loading…</div>`}
         ${state.status === 'error' && html`<div class="text-xs text-rose-600 dark:text-rose-400">Could not load: ${state.message}</div>`}
@@ -221,6 +230,9 @@ function ViewModeToggle({ viewMode, onToggle }) {
 
 // --- Row used in both flat and tree modes ---
 function ItemRow({ item, selected, onSelect, indent = 0 }) {
+  // For orphans (built-in / discovered) we skip the description line — the
+  // text is boilerplate and just adds visual noise across many rows.
+  const showDesc = !isOrphan(item) && item.description;
   return html`
     <li
       onClick=${() => onSelect(item)}
@@ -234,7 +246,7 @@ function ItemRow({ item, selected, onSelect, indent = 0 }) {
         <span class="font-medium text-sm truncate">${item.title || item.name}</span>
         <${ScopeBadge} scope=${item.scope} />
       </div>
-      <div class="mt-1 text-xs text-zinc-600 dark:text-zinc-400 line-clamp-2">${item.description}</div>
+      ${showDesc && html`<div class="mt-1 text-xs text-zinc-600 dark:text-zinc-400 line-clamp-2">${item.description}</div>`}
       <div class="mt-1.5 flex items-center gap-3 text-[11px] text-zinc-500 mono">
         <span>${item.usage?.count ?? 0} uses</span>
         <span>last ${relTime(item.usage?.last_ts)}</span>
@@ -302,6 +314,12 @@ function App() {
   });
   const [windowId, setWindowId] = useState(localStorage.getItem('catalog.window') || '14');
   const windowDays = (WINDOWS.find((w) => w.id === windowId) ?? WINDOWS[1]).days;
+  const [showBuiltins, setShowBuiltins] = useState(localStorage.getItem('catalog.showBuiltins') === '1');
+  function toggleBuiltins() {
+    const next = !showBuiltins;
+    setShowBuiltins(next);
+    try { localStorage.setItem('catalog.showBuiltins', next ? '1' : '0'); } catch (_) {}
+  }
 
   function toggleTheme() {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -319,6 +337,15 @@ function App() {
     if (next.has(name)) next.delete(name); else next.add(name);
     setExpanded(next);
     try { localStorage.setItem('catalog.expanded', JSON.stringify([...next])); } catch (_) {}
+  }
+  function expandAllPlugins(names) {
+    const next = new Set(names);
+    setExpanded(next);
+    try { localStorage.setItem('catalog.expanded', JSON.stringify([...next])); } catch (_) {}
+  }
+  function collapseAllPlugins() {
+    setExpanded(new Set());
+    try { localStorage.setItem('catalog.expanded', '[]'); } catch (_) {}
   }
 
   // Persist sort + window + auto-switch sort when stale is active.
@@ -359,18 +386,28 @@ function App() {
   // inside renderTree so children counts reflect the full inventory.
   const searchFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((it) =>
+    const visible = items.filter((it) => showBuiltins || it.scope !== 'builtin');
+    if (!q) return visible;
+    return visible.filter((it) =>
       it.name?.toLowerCase().includes(q) ||
       it.title?.toLowerCase().includes(q) ||
       it.description?.toLowerCase().includes(q)
     );
-  }, [items, query]);
+  }, [items, query, showBuiltins]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const fromPlugin = (it) => it.scope?.startsWith?.('plugin:');
+    // Plugin-provided items are anything whose scope is plugin:<name> OR a
+    // discovered orphan whose name is namespaced as `plugin:thing` (these are
+    // skills/commands from a plugin whose source isn't in the current scan).
+    const fromPlugin = (it) =>
+      it.scope?.startsWith?.('plugin:') ||
+      (it.scope === 'discovered' && typeof it.name === 'string' && it.name.includes(':'));
     let out = items.filter((it) => {
+      // Built-in Claude Code commands are hidden by default — they clutter the
+      // catalog with `/clear`, `/compact`, etc. that aren't really "installed
+      // content". Opt back in via the show-built-ins toggle.
+      if (!showBuiltins && it.scope === 'builtin') return false;
       const stale = isStaleForWindow(it, windowDays);
       if (type === 'stale') {
         if (!stale) return false;
@@ -398,22 +435,33 @@ function App() {
       return (a.name ?? '').localeCompare(b.name ?? '');
     });
     return out;
-  }, [items, query, type, sort, windowDays]);
+  }, [items, query, type, sort, windowDays, showBuiltins]);
 
   useEffect(() => {
-    if (!selected && filtered.length) setSelected(filtered[0]);
-    // Only clear the selection if the item has vanished from inventory entirely
-    // (not just been filtered out by window/type/search) so the detail pane
-    // doesn't whiplash when the user picks a stale plugin in tree view.
-    if (selected && !items.find((it) => it.id === selected.id)) setSelected(filtered[0] ?? null);
+    if (!selected && filtered.length) { setSelected(filtered[0]); return; }
+    // Selection vanished from inventory entirely — reset to first visible.
+    if (selected && !items.find((it) => it.id === selected.id)) {
+      setSelected(filtered[0] ?? null);
+      return;
+    }
+    // Selection still exists but isn't in the current filtered view (user
+    // switched type / window / built-ins). Auto-advance to the first visible
+    // row so the detail pane always shows something from the current list.
+    if (selected && filtered.length && !filtered.find((it) => it.id === selected.id)) {
+      setSelected(filtered[0]);
+    }
   }, [filtered, items]);
 
   const counts = useMemo(() => {
     // Type-pill counts only include items inside the activity window so the
     // numbers match what the user actually sees in the list.
     const c = { all: 0, skill: 0, command: 0, mcp: 0, plugin: 0, stale: 0 };
-    const fromPlugin = (it) => it.scope?.startsWith?.('plugin:');
+    const fromPlugin = (it) =>
+      it.scope?.startsWith?.('plugin:') ||
+      (it.scope === 'discovered' && typeof it.name === 'string' && it.name.includes(':'));
     for (const it of items) {
+      // Mirror the filter: hide built-ins from counts unless opted in.
+      if (!showBuiltins && it.scope === 'builtin') continue;
       if (isStaleForWindow(it, windowDays)) {
         c.stale += 1;
       } else {
@@ -427,7 +475,14 @@ function App() {
       }
     }
     return c;
-  }, [items, windowDays]);
+  }, [items, windowDays, showBuiltins]);
+
+  // Total built-ins in inventory (regardless of toggle), so the toggle can
+  // show a count next to the label.
+  const builtinCount = useMemo(
+    () => items.reduce((n, it) => n + (it.scope === 'builtin' ? 1 : 0), 0),
+    [items],
+  );
 
   const totalUses = useMemo(
     () => items.reduce((acc, it) => acc + (it.usage?.count ?? 0), 0),
@@ -480,10 +535,18 @@ function App() {
     const userItemsVisible    = type === 'plugin' ? [] : groups.userItems.filter(leafVisible);
     const projectItemsVisible = type === 'plugin' ? [] : groups.projectItems.filter(leafVisible);
 
+    const allExpanded = groupsToShow.length > 0 && groupsToShow.every((g) => expanded.has(g.name));
+
     return html`
       <div>
         ${groupsToShow.length ? html`
-          <div class="px-4 pt-3 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">Installed plugins</div>
+          <div class="px-4 pt-3 pb-1 flex items-center justify-between text-[11px] uppercase tracking-wider text-zinc-500">
+            <span>Installed plugins · ${groupsToShow.length}</span>
+            <button
+              onClick=${() => allExpanded ? collapseAllPlugins() : expandAllPlugins(groupsToShow.map((g) => g.name))}
+              class="normal-case tracking-normal text-[11px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+            >${allExpanded ? 'Collapse all' : 'Expand all'}</button>
+          </div>
           <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
             ${groupsToShow.map((g) => html`
               <li key=${g.name}>
@@ -517,7 +580,7 @@ function App() {
         ` : null}
 
         ${userItemsVisible.length ? html`
-          <div class="px-4 pt-4 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">User</div>
+          <div class="px-4 pt-4 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">User · ${userItemsVisible.length}</div>
           <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
             ${userItemsVisible.map((it) => html`
               <${ItemRow} key=${it.id} item=${it} selected=${selected?.id === it.id} onSelect=${setSelected} />
@@ -526,7 +589,7 @@ function App() {
         ` : null}
 
         ${projectItemsVisible.length ? html`
-          <div class="px-4 pt-4 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">${groups.projectLabel}</div>
+          <div class="px-4 pt-4 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">${groups.projectLabel} · ${projectItemsVisible.length}</div>
           <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
             ${projectItemsVisible.map((it) => html`
               <${ItemRow} key=${it.id} item=${it} selected=${selected?.id === it.id} onSelect=${setSelected} />
@@ -539,52 +602,70 @@ function App() {
 
   return html`
     <div class="h-full flex flex-col">
-      <header class="border-b border-zinc-200 dark:border-zinc-800 px-5 py-3 flex items-center gap-4">
-        <div class="flex items-center gap-2">
-          <span class="text-amber-500 mono text-sm">▍</span>
-          <span class="font-semibold tracking-tight">catalog</span>
-          <span class="text-zinc-500 text-xs mono truncate max-w-[28ch]" title=${cwd}>${cwd || ''}</span>
+      <header class="border-b border-zinc-200 dark:border-zinc-800">
+        <div class="px-5 pt-3 pb-2 flex items-center gap-4">
+          <div class="flex items-center gap-2">
+            <span class="text-amber-500 mono text-sm">▍</span>
+            <span class="font-semibold tracking-tight">catalog</span>
+            <span class="text-zinc-500 text-xs mono truncate max-w-[28ch]" title=${cwd}>${cwd || ''}</span>
+          </div>
+          <div class="flex-1 max-w-2xl">
+            <input
+              type="search"
+              placeholder="Search skills, commands, MCP tools, plugins…"
+              value=${query}
+              onInput=${(e) => setQuery(e.currentTarget.value)}
+              class="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-3 py-1.5 text-sm placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
+            />
+          </div>
+          <div class="ml-auto flex items-center gap-1">
+            <${ViewModeToggle} viewMode=${viewMode} onToggle=${toggleViewMode} />
+            <${ThemeToggle} theme=${theme} onToggle=${toggleTheme} />
+          </div>
         </div>
-        <div class="flex-1 max-w-xl">
-          <input
-            type="search"
-            placeholder="Search skills, commands, MCP tools, plugins…"
-            value=${query}
-            onInput=${(e) => setQuery(e.currentTarget.value)}
-            class="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-3 py-1.5 text-sm placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
-          />
-        </div>
-        <div class="flex gap-1">
-          ${TYPES.map((t) => html`
+        <div class="px-5 pb-3 flex items-center gap-3 flex-wrap">
+          <div class="flex gap-1">
+            ${TYPES.map((t) => html`
+              <button
+                key=${t}
+                onClick=${() => setType(t)}
+                class="px-2.5 py-1 rounded text-xs font-medium transition ${type === t
+                  ? 'bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900'
+                  : 'bg-white text-zinc-700 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-800'}"
+              >
+                ${t}
+                <span class="ml-1 text-[10px] opacity-60 mono">${counts[t] ?? 0}</span>
+              </button>
+            `)}
+          </div>
+          <div class="ml-auto flex items-center gap-2">
             <button
-              key=${t}
-              onClick=${() => setType(t)}
-              class="px-2.5 py-1 rounded text-xs font-medium transition ${type === t
-                ? 'bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900'
-                : 'bg-white text-zinc-700 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-800'}"
+              onClick=${toggleBuiltins}
+              title="Toggle visibility of built-in Claude Code commands like /clear and /compact"
+              class="px-2.5 py-1 rounded text-xs transition border ${showBuiltins
+                ? 'bg-zinc-900 text-zinc-50 border-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 dark:border-zinc-100'
+                : 'bg-white text-zinc-600 hover:bg-zinc-100 border-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:border-zinc-800'}"
             >
-              ${t}
-              <span class="ml-1 text-[10px] opacity-60 mono">${counts[t] ?? 0}</span>
+              ${showBuiltins ? '✓ ' : ''}built-ins
+              <span class="ml-1 text-[10px] opacity-60 mono">${builtinCount}</span>
             </button>
-          `)}
+            <select
+              value=${windowId}
+              onChange=${(e) => setWindowId(e.currentTarget.value)}
+              title="Activity window — items unused beyond this are stale"
+              class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-2 py-1.5 text-xs"
+            >
+              ${WINDOWS.map((w) => html`<option key=${w.id} value=${w.id}>${w.label}</option>`)}
+            </select>
+            <select
+              value=${sort}
+              onChange=${(e) => setSort(e.currentTarget.value)}
+              class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-2 py-1.5 text-xs"
+            >
+              ${SORTS.map((s) => html`<option key=${s.id} value=${s.id}>${s.label}</option>`)}
+            </select>
+          </div>
         </div>
-        <select
-          value=${windowId}
-          onChange=${(e) => setWindowId(e.currentTarget.value)}
-          title="Activity window — items unused beyond this are stale"
-          class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-2 py-1.5 text-xs"
-        >
-          ${WINDOWS.map((w) => html`<option key=${w.id} value=${w.id}>${w.label}</option>`)}
-        </select>
-        <select
-          value=${sort}
-          onChange=${(e) => setSort(e.currentTarget.value)}
-          class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-2 py-1.5 text-xs"
-        >
-          ${SORTS.map((s) => html`<option key=${s.id} value=${s.id}>${s.label}</option>`)}
-        </select>
-        <${ViewModeToggle} viewMode=${viewMode} onToggle=${toggleViewMode} />
-        <${ThemeToggle} theme=${theme} onToggle=${toggleTheme} />
       </header>
 
       <main class="flex-1 grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] overflow-hidden">
@@ -627,7 +708,7 @@ function App() {
                   <dd class="mono">${selected.usage?.errors ?? 0}</dd>
                 </div>
                 <div>
-                  <dt class="text-[11px] uppercase tracking-wider text-zinc-500">Date added</dt>
+                  <dt class="text-[11px] uppercase tracking-wider text-zinc-500" title="When the catalog scanner first saw this file — usually plugin install or cache extraction date, not install date.">Indexed</dt>
                   <dd class="mono">${selected.date_added?.slice(0, 10) || '—'}</dd>
                 </div>
                 ${selected.source_path ? html`
@@ -636,6 +717,7 @@ function App() {
                     <dd class="mt-1 space-y-2">
                       <div class="mono text-xs break-all text-zinc-700 dark:text-zinc-400">${selected.source_path}</div>
                       <${EditorLinks} path=${selected.source_path} />
+                      <${SourceBody} id=${selected.id} />
                     </dd>
                   </div>
                 ` : null}
@@ -646,8 +728,6 @@ function App() {
                   ${selected.tags.map((t) => html`<span class="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 text-[11px] mono">${t}</span>`)}
                 </div>
               ` : null}
-
-              ${selected.source_path && html`<${SourceBody} id=${selected.id} />`}
             </article>
           ` : html`<div class="p-6 text-zinc-500 text-sm">Select an item.</div>`}
         </section>

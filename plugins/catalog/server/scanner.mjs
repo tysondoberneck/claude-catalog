@@ -206,8 +206,22 @@ async function readProjectScopedMcpFromUserConfig(cwd) {
 
 async function scanInstalledPlugin(pluginRoot, pluginName, version) {
   const out = [];
-  const manifestPath = join(pluginRoot, '.claude-plugin', 'plugin.json');
-  const manifest = await safeReadJSON(manifestPath) || {};
+  // plugin.json (when present) supplies the human-readable name/description.
+  // For source_path we prefer plugin.json, then marketplace.json, then
+  // README.md, then the plugin root — so "View source" and editor links
+  // always point at something the body endpoint can actually read.
+  const pluginJsonPath = join(pluginRoot, '.claude-plugin', 'plugin.json');
+  const manifest = (await safeReadJSON(pluginJsonPath)) ?? {};
+  const sourceCandidates = [
+    pluginJsonPath,
+    join(pluginRoot, '.claude-plugin', 'marketplace.json'),
+    join(pluginRoot, 'README.md'),
+  ];
+  let manifestPath = pluginRoot;
+  for (const p of sourceCandidates) {
+    const st = await safeStat(p);
+    if (st?.isFile()) { manifestPath = p; break; }
+  }
   const manifestStat = await safeStat(manifestPath);
 
   out.push({

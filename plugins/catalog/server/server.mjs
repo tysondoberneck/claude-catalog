@@ -12,6 +12,22 @@ import { aggregateFromHistory } from './history.mjs';
 import { aggregateFromSkillUsage } from './skill-usage.mjs';
 import { addDaily, emptyDaily } from './time.mjs';
 
+// Claude Code's built-in slash commands. These show up in history.jsonl just
+// like user/plugin commands, so without this list they orphan as "discovered"
+// items and drown out real installed content. Keep conservative — anything
+// missing here just stays a discovered orphan, which the user can still opt
+// to view.
+const BUILTIN_COMMANDS = new Set([
+  'add-dir', 'agents', 'bashes', 'bug', 'clear', 'compact', 'config',
+  'context', 'cost', 'diff', 'doctor', 'exit', 'export', 'feedback',
+  'help', 'hooks', 'ide', 'init', 'install-github-app', 'login', 'logout',
+  'mcp', 'memory', 'migrate-installer', 'model', 'output-style',
+  'permissions', 'plugin', 'plugins', 'pr-comments', 'quit', 'release-notes',
+  'reload-plugins', 'resume', 'review', 'security-review', 'skills',
+  'statusline', 'status', 'terminal-setup', 'todos', 'ultrareview', 'upgrade',
+  'usage', 'vim',
+]);
+
 function cloneUsage(map) {
   const out = new Map();
   for (const [id, v] of map) {
@@ -167,16 +183,23 @@ async function handleApiItems(req, res) {
       if (seenIds.has(serverId)) continue;
     }
     const name = id.slice(colon + 1);
+    // Built-in Claude Code commands aren't part of any plugin or user
+    // skills/commands directory, so they always orphan. Mark them so the UI
+    // can hide them by default — they're noise in a "what do I have
+    // installed" view.
+    const isBuiltin = type === 'command' && BUILTIN_COMMANDS.has(name);
     items.push({
       id,
       type,
-      scope: 'discovered',
+      scope: isBuiltin ? 'builtin' : 'discovered',
       name,
       title: name,
-      description: 'Discovered from usage data. The source file for this item was not found in the current scan — it may belong to another project or an inactive plugin.',
+      description: isBuiltin
+        ? 'Built-in Claude Code command.'
+        : 'Source not found in current scan.',
       source_path: null,
       date_added: null,
-      tags: ['discovered'],
+      tags: isBuiltin ? ['builtin'] : ['discovered'],
       usage: { count: u.count, last_ts: u.last_ts, errors: u.errors, daily: u.daily ?? emptyDaily() },
     });
   }
@@ -211,6 +234,15 @@ async function handleApiItemBody(id, res) {
   if (!item) return json(res, 404, { error: 'not_found', id });
 
   try {
+    const st = await stat(item.source_path);
+    if (st.isDirectory()) {
+      return json(res, 200, {
+        id,
+        type: item.type,
+        source_path: item.source_path,
+        body: `_No source file for this plugin._\n\nPath: \`${item.source_path}\``,
+      });
+    }
     const body = await readFile(item.source_path, 'utf8');
     return json(res, 200, { id, type: item.type, source_path: item.source_path, body });
   } catch (err) {
