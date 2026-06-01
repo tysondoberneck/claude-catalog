@@ -130,6 +130,26 @@ async function handleApiItems(req, res) {
     };
   });
 
+  // Plugin items don't get direct usage events — their skills, commands, and
+  // MCP servers do. Roll up the children's totals into the plugin parent so
+  // a plugin's "last used" reflects when you last used anything inside it.
+  for (const item of items) {
+    if (item.type !== 'plugin') continue;
+    const scopeTag = `plugin:${item.name}`;
+    let count = item.usage.count;
+    let last_ts = item.usage.last_ts;
+    let errors = item.usage.errors;
+    const daily = [...item.usage.daily];
+    for (const child of items) {
+      if (child === item || child.scope !== scopeTag) continue;
+      count += child.usage.count;
+      if (child.usage.last_ts > last_ts) last_ts = child.usage.last_ts;
+      errors += child.usage.errors;
+      addDaily(daily, child.usage.daily);
+    }
+    item.usage = { count, last_ts, errors, daily };
+  }
+
   // Surface usage data even when no inventory item backs it. This happens
   // when:
   //   - the active cwd's project skills/commands don't match the session
