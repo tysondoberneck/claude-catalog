@@ -10,15 +10,21 @@ import { fileURLToPath } from 'node:url';
 import { scanInventory } from './scanner.mjs';
 import { aggregateByItem } from './storage.mjs';
 import { aggregateFromHistory } from './history.mjs';
+import { addDaily, emptyDaily } from './time.mjs';
 
 function mergeUsage(a, b) {
-  const out = new Map(a);
+  const out = new Map();
+  for (const [id, v] of a) {
+    out.set(id, { count: v.count, last_ts: v.last_ts, errors: v.errors, daily: [...(v.daily ?? emptyDaily())] });
+  }
   for (const [id, v] of b) {
-    const cur = out.get(id) ?? { count: 0, last_ts: 0, errors: 0 };
+    const cur = out.get(id) ?? { count: 0, last_ts: 0, errors: 0, daily: emptyDaily() };
+    addDaily(cur.daily, v.daily);
     out.set(id, {
       count: cur.count + v.count,
       last_ts: Math.max(cur.last_ts, v.last_ts),
       errors: cur.errors + v.errors,
+      daily: cur.daily,
     });
   }
   return out;
@@ -90,22 +96,60 @@ async function handleApiItems(req, res) {
       let count = u?.count ?? 0;
       let last_ts = u?.last_ts ?? 0;
       let errors = u?.errors ?? 0;
+      const daily = [...(u?.daily ?? emptyDaily())];
       for (const [eid, e] of usage) {
         if (eid.startsWith(prefix)) {
           count += e.count;
           if (e.last_ts > last_ts) last_ts = e.last_ts;
           errors += e.errors;
+          addDaily(daily, e.daily);
         }
       }
-      u = { count, last_ts, errors };
+      u = { count, last_ts, errors, daily };
     }
     return {
       ...item,
-      usage: u ? { count: u.count, last_ts: u.last_ts, errors: u.errors } : { count: 0, last_ts: 0, errors: 0 },
+      usage: u
+        ? { count: u.count, last_ts: u.last_ts, errors: u.errors, daily: u.daily ?? emptyDaily() }
+        : { count: 0, last_ts: 0, errors: 0, daily: emptyDaily() },
     };
   });
 
+  rememberCwd(cwd, items);
   json(res, 200, { items, scanned_at: Date.now(), cwd });
+}
+
+// Tiny cache so /api/items/:id/body can resolve item id -> source_path
+// without rescanning the filesystem. Capped at 4 different cwds.
+const lastInventoryByCwd = new Map();
+function rememberCwd(cwd, items) {
+  lastInventoryByCwd.set(cwd, { items, at: Date.now() });
+  while (lastInventoryByCwd.size > 4) {
+    const firstKey = lastInventoryByCwd.keys().next().value;
+    lastInventoryByCwd.delete(firstKey);
+  }
+}
+
+async function handleApiItemBody(id, res) {
+  // Find the item across any cached inventory; if none, do a fresh scan.
+  let item = null;
+  for (const { items } of lastInventoryByCwd.values()) {
+    const found = items.find((it) => it.id === id);
+    if (found) { item = found; break; }
+  }
+  if (!item) {
+    const fresh = await scanInventory({ cwd: process.cwd() });
+    item = fresh.find((it) => it.id === id) ?? null;
+    if (item) rememberCwd(process.cwd(), fresh);
+  }
+  if (!item) return json(res, 404, { error: 'not_found', id });
+
+  try {
+    const body = await readFile(item.source_path, 'utf8');
+    return json(res, 200, { id, type: item.type, source_path: item.source_path, body });
+  } catch (err) {
+    return json(res, 500, { error: 'read_failed', message: err.message });
+  }
 }
 
 const server = createServer(async (req, res) => {
@@ -114,6 +158,8 @@ const server = createServer(async (req, res) => {
     const url = req.url.split('?')[0];
     if (url === '/healthz') return json(res, 200, { ok: true, pid: process.pid });
     if (url === '/api/items') return handleApiItems(req, res);
+    const bodyMatch = url.match(/^\/api\/items\/(.+)\/body$/);
+    if (bodyMatch) return handleApiItemBody(decodeURIComponent(bodyMatch[1]), res);
     return serveStatic(req, res);
   } catch (err) {
     json(res, 500, { error: 'internal', message: err.message });

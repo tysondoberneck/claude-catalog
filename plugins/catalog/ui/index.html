@@ -27,6 +27,25 @@
     ::-webkit-scrollbar { width: 10px; height: 10px; }
     ::-webkit-scrollbar-thumb { background: rgba(120,120,120,.25); border-radius: 6px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(120,120,120,.4); }
+
+    /* Minimal markdown styling for the source-body preview. */
+    .md h1 { font-size: 1.05rem; font-weight: 600; margin: 1rem 0 .5rem; }
+    .md h2 { font-size: 0.95rem; font-weight: 600; margin: 1rem 0 .5rem; }
+    .md h3 { font-size: 0.875rem; font-weight: 600; margin: .75rem 0 .25rem; }
+    .md p, .md ul, .md ol, .md pre { margin: .5rem 0; font-size: 0.875rem; line-height: 1.55; }
+    .md ul, .md ol { padding-left: 1.25rem; }
+    .md li { margin: .15rem 0; }
+    .md code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+               font-size: 0.8rem; padding: 0 .25rem; border-radius: 3px;
+               background: rgba(120,120,120,.12); }
+    .md pre { padding: .75rem; border-radius: 6px; overflow-x: auto;
+              background: rgba(120,120,120,.10); }
+    .md pre code { padding: 0; background: transparent; font-size: 0.8rem; }
+    .md a { color: rgb(217 119 6); text-decoration: underline; }
+    html.dark .md a { color: rgb(252 211 77); }
+    .md blockquote { border-left: 2px solid rgba(120,120,120,.3); padding-left: .75rem;
+                     color: rgba(120,120,120,.9); margin: .5rem 0; }
+    .md hr { border-color: rgba(120,120,120,.25); margin: 1rem 0; }
   </style>
 </head>
 <body class="bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">

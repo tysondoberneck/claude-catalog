@@ -8,6 +8,8 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
+import { bucketDay, emptyDaily } from './time.mjs';
+
 export const STATE_DIR = join(homedir(), '.claude', 'catalog');
 export const EVENTS_FILE = join(STATE_DIR, 'events.jsonl');
 export const SETTINGS_FILE = join(STATE_DIR, 'settings.json');
@@ -41,10 +43,12 @@ export async function aggregateByItem() {
     const id = evt.item_id;
     if (!id) continue;
 
-    const cur = stats.get(id) ?? { count: 0, last_ts: 0, errors: 0 };
+    const cur = stats.get(id) ?? { count: 0, last_ts: 0, errors: 0, daily: emptyDaily() };
     cur.count += 1;
     if (evt.ts > cur.last_ts) cur.last_ts = evt.ts;
     if (evt.kind === 'error') cur.errors += 1;
+    const idx = bucketDay(evt.ts);
+    if (idx >= 0) cur.daily[idx] += 1;
     stats.set(id, cur);
   }
 

@@ -18,6 +18,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
+import { bucketDay, emptyDaily } from './time.mjs';
+
 const HOME = homedir();
 const HISTORY_FILE = join(HOME, '.claude', 'history.jsonl');
 const PROJECTS_DIR = join(HOME, '.claude', 'projects');
@@ -27,10 +29,12 @@ let cache = null;
 let cacheTime = 0;
 
 function bump(map, id, ts, isError = false) {
-  const cur = map.get(id) ?? { count: 0, last_ts: 0, errors: 0 };
+  const cur = map.get(id) ?? { count: 0, last_ts: 0, errors: 0, daily: emptyDaily() };
   cur.count += 1;
   if (ts > cur.last_ts) cur.last_ts = ts;
   if (isError) cur.errors += 1;
+  const idx = bucketDay(ts);
+  if (idx >= 0) cur.daily[idx] += 1;
   map.set(id, cur);
 }
 

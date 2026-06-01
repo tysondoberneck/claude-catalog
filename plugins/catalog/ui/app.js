@@ -1,10 +1,11 @@
 import { h, render } from 'https://esm.sh/preact@10.22.0';
 import { useEffect, useMemo, useState } from 'https://esm.sh/preact@10.22.0/hooks';
 import htm from 'https://esm.sh/htm@3.1.1';
+import { marked } from 'https://esm.sh/marked@12.0.2';
 
 const html = htm.bind(h);
 
-const TYPES = ['all', 'skill', 'command', 'mcp', 'plugin'];
+const TYPES = ['all', 'skill', 'command', 'mcp', 'plugin', 'stale'];
 const SORTS = [
   { id: 'recent',     label: 'Recently used' },
   { id: 'count',      label: 'Most used' },
@@ -17,7 +18,16 @@ const CHIP_BY_TYPE = {
   command: 'ring-blue-500/40     text-blue-700     dark:text-blue-300',
   mcp:     'ring-emerald-500/40  text-emerald-700  dark:text-emerald-300',
   plugin:  'ring-zinc-400/60     text-zinc-700     dark:text-zinc-300',
+  stale:   'ring-rose-500/40     text-rose-700     dark:text-rose-300',
 };
+
+const STALE_MS = 60 * 24 * 60 * 60 * 1000;
+
+function isStale(item) {
+  const last = item.usage?.last_ts ?? 0;
+  if (last === 0) return true;
+  return Date.now() - last > STALE_MS;
+}
 
 function relTime(ts) {
   if (!ts) return 'never';
@@ -50,6 +60,105 @@ function ScopeBadge({ scope }) {
   return null;
 }
 
+// --- Sparkline ---
+// Smooth line over `data` (length N, oldest first, today last). Renders nothing
+// if every value is zero so unused items honestly look unused.
+function smoothPath(data, width, height, pad = 1.5) {
+  if (data.length < 2) return '';
+  const max = Math.max(...data, 1);
+  const innerW = width;
+  const innerH = height - pad * 2;
+  const x = (i) => (i * innerW) / (data.length - 1);
+  const y = (v) => pad + innerH - (v / max) * innerH;
+
+  let d = `M ${x(0).toFixed(2)},${y(data[0]).toFixed(2)}`;
+  for (let i = 1; i < data.length; i++) {
+    const px = x(i - 1), py = y(data[i - 1]);
+    const cx = x(i),     cy = y(data[i]);
+    // Midpoint-quadratic smoothing
+    const mx = (px + cx) / 2;
+    const my = (py + cy) / 2;
+    d += ` Q ${px.toFixed(2)},${py.toFixed(2)} ${mx.toFixed(2)},${my.toFixed(2)}`;
+    if (i === data.length - 1) {
+      d += ` T ${cx.toFixed(2)},${cy.toFixed(2)}`;
+    }
+  }
+  return d;
+}
+
+function Sparkline({ data, width = 120, height = 22 }) {
+  if (!data || !data.length) return null;
+  const max = Math.max(...data);
+  if (max === 0) {
+    return html`<div style="width:${width}px;height:${height}px"></div>`;
+  }
+  const linePath = smoothPath(data, width, height);
+  // Build a closed area path under the line for the soft fill.
+  const areaPath = `${linePath} L ${width.toFixed(2)},${height.toFixed(2)} L 0,${height.toFixed(2)} Z`;
+  return html`
+    <svg width=${width} height=${height} viewBox="0 0 ${width} ${height}" class="text-amber-500 dark:text-amber-400 block">
+      <path d=${areaPath} fill="currentColor" fill-opacity="0.14" stroke="none"/>
+      <path d=${linePath} fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  `;
+}
+
+// --- Editor links ---
+function EditorLinks({ path }) {
+  if (!path) return null;
+  const parent = path.replace(/\/[^/]*$/, '');
+  return html`
+    <div class="flex flex-wrap gap-2 text-[11px]">
+      <a href=${`vscode://file/${path}`} class="px-2 py-0.5 rounded ring-1 ring-zinc-300 dark:ring-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 mono">VS Code</a>
+      <a href=${`cursor://file/${path}`} class="px-2 py-0.5 rounded ring-1 ring-zinc-300 dark:ring-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 mono">Cursor</a>
+      <a href=${`file://${parent}`} class="px-2 py-0.5 rounded ring-1 ring-zinc-300 dark:ring-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 mono">Reveal</a>
+    </div>
+  `;
+}
+
+// --- Source body lazy loader ---
+function SourceBody({ id }) {
+  const [state, setState] = useState({ status: 'idle' });
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open || state.status !== 'idle') return;
+    let cancelled = false;
+    setState({ status: 'loading' });
+    fetch(`/api/items/${encodeURIComponent(id)}/body`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => { if (!cancelled) setState({ status: 'ok', body: data.body }); })
+      .catch((err) => { if (!cancelled) setState({ status: 'error', message: err.message }); });
+    return () => { cancelled = true; };
+  }, [open, id]);
+
+  // Reset state when item changes
+  useEffect(() => {
+    setState({ status: 'idle' });
+    setOpen(false);
+  }, [id]);
+
+  const rendered = useMemo(() => {
+    if (state.status !== 'ok') return null;
+    return { __html: marked.parse(state.body, { mangle: false, headerIds: false }) };
+  }, [state]);
+
+  return html`
+    <details class="mt-6 border-t border-zinc-200 dark:border-zinc-800 pt-4" open=${open} onToggle=${(e) => setOpen(e.currentTarget.open)}>
+      <summary class="cursor-pointer text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 select-none">View source</summary>
+      <div class="mt-3">
+        ${state.status === 'loading' && html`<div class="text-xs text-zinc-500">Loading…</div>`}
+        ${state.status === 'error' && html`<div class="text-xs text-rose-600 dark:text-rose-400">Could not load: ${state.message}</div>`}
+        ${state.status === 'ok' && html`<div class="md text-zinc-800 dark:text-zinc-200" dangerouslySetInnerHTML=${rendered}></div>`}
+      </div>
+    </details>
+  `;
+}
+
+// --- Theme + view-mode toggles ---
 function ThemeToggle({ theme, onToggle }) {
   const isDark = theme === 'dark';
   return html`
@@ -72,17 +181,114 @@ function ThemeToggle({ theme, onToggle }) {
   `;
 }
 
+function ViewModeToggle({ viewMode, onToggle }) {
+  const isTree = viewMode === 'tree';
+  return html`
+    <button
+      onClick=${onToggle}
+      title=${isTree ? 'Switch to flat list' : 'Group by plugin (tree view)'}
+      class="p-1.5 rounded-md text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 transition"
+    >
+      ${isTree ? html`
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="8" y1="6" x2="21" y2="6"/>
+          <line x1="8" y1="12" x2="21" y2="12"/>
+          <line x1="8" y1="18" x2="21" y2="18"/>
+          <line x1="3" y1="6" x2="3.01" y2="6"/>
+          <line x1="3" y1="12" x2="3.01" y2="12"/>
+          <line x1="3" y1="18" x2="3.01" y2="18"/>
+        </svg>
+      ` : html`
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 5h6v6H3zM15 5h6v6h-6zM3 17h6v4H3zM15 13h6v8h-6z"/>
+          <path d="M9 8h6M18 11v2M6 11v6"/>
+        </svg>
+      `}
+    </button>
+  `;
+}
+
+// --- Row used in both flat and tree modes ---
+function ItemRow({ item, selected, onSelect, indent = 0 }) {
+  return html`
+    <li
+      onClick=${() => onSelect(item)}
+      class="py-3 cursor-pointer transition border-l-2 ${selected
+        ? 'bg-amber-50 dark:bg-amber-500/10 border-l-amber-500'
+        : 'hover:bg-zinc-100 dark:hover:bg-zinc-900 border-l-transparent'}"
+      style=${`padding-left: ${16 + indent * 16}px; padding-right: 16px;`}
+    >
+      <div class="flex items-center gap-2 flex-wrap">
+        <${TypeChip} type=${item.type} />
+        <span class="font-medium text-sm truncate">${item.title || item.name}</span>
+        <${ScopeBadge} scope=${item.scope} />
+      </div>
+      <div class="mt-1 text-xs text-zinc-600 dark:text-zinc-400 line-clamp-2">${item.description}</div>
+      <div class="mt-1.5 flex items-center gap-3 text-[11px] text-zinc-500 mono">
+        <span>${item.usage?.count ?? 0} uses</span>
+        <span>last ${relTime(item.usage?.last_ts)}</span>
+        <span class="ml-auto"><${Sparkline} data=${item.usage?.daily} /></span>
+      </div>
+    </li>
+  `;
+}
+
+// --- Tree groupings ---
+function buildGroups(items, cwd) {
+  // Returns ordered groups: [{ kind, label, items, parent? }, ...]
+  // For plugins, parent is the plugin item itself (rendered as a header).
+  const pluginParents = new Map(); // pluginName -> item
+  const pluginChildren = new Map(); // pluginName -> child items[]
+  const userItems = [];
+  const projectItems = [];
+
+  for (const it of items) {
+    if (it.type === 'plugin') {
+      pluginParents.set(it.name, it);
+      continue;
+    }
+    if (it.scope?.startsWith?.('plugin:')) {
+      const pluginName = it.scope.slice('plugin:'.length);
+      if (!pluginChildren.has(pluginName)) pluginChildren.set(pluginName, []);
+      pluginChildren.get(pluginName).push(it);
+      continue;
+    }
+    if (it.scope === 'project') projectItems.push(it);
+    else userItems.push(it);
+  }
+
+  const pluginGroups = [];
+  for (const [name, parent] of pluginParents) {
+    const children = pluginChildren.get(name) ?? [];
+    pluginGroups.push({ kind: 'plugin', name, parent, children });
+  }
+  pluginGroups.sort((a, b) => (b.parent.usage?.count ?? 0) - (a.parent.usage?.count ?? 0) || a.name.localeCompare(b.name));
+
+  return {
+    pluginGroups,
+    userItems,
+    projectItems,
+    projectLabel: cwd ? `Project · ${cwd.split('/').slice(-1)[0]}` : 'Project',
+  };
+}
+
+// --- App ---
 function App() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [query, setQuery] = useState('');
   const [type, setType] = useState('all');
-  const [sort, setSort] = useState('recent');
+  const [sort, setSort] = useState(localStorage.getItem('catalog.sort') || 'recent');
   const [selected, setSelected] = useState(null);
   const [scannedAt, setScannedAt] = useState(null);
   const [cwd, setCwd] = useState('');
   const [theme, setTheme] = useState(document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+  const [viewMode, setViewMode] = useState(localStorage.getItem('catalog.viewMode') || 'list');
+  const [expanded, setExpanded] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('catalog.expanded') || '[]')); }
+    catch { return new Set(); }
+  });
 
   function toggleTheme() {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -90,6 +296,25 @@ function App() {
     document.documentElement.classList.toggle('dark', next === 'dark');
     try { localStorage.setItem('catalog.theme', next); } catch (_) {}
   }
+  function toggleViewMode() {
+    const next = viewMode === 'tree' ? 'list' : 'tree';
+    setViewMode(next);
+    try { localStorage.setItem('catalog.viewMode', next); } catch (_) {}
+  }
+  function togglePlugin(name) {
+    const next = new Set(expanded);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    setExpanded(next);
+    try { localStorage.setItem('catalog.expanded', JSON.stringify([...next])); } catch (_) {}
+  }
+
+  // Persist sort + auto-switch sort when stale is active.
+  useEffect(() => {
+    try { localStorage.setItem('catalog.sort', sort); } catch (_) {}
+  }, [sort]);
+  useEffect(() => {
+    if (type === 'stale' && sort !== 'date_added') setSort('date_added');
+  }, [type]);
 
   async function load() {
     try {
@@ -115,7 +340,11 @@ function App() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     let out = items.filter((it) => {
-      if (type !== 'all' && it.type !== type) return false;
+      if (type === 'stale') {
+        if (!isStale(it)) return false;
+      } else if (type !== 'all') {
+        if (it.type !== type) return false;
+      }
       if (!q) return true;
       return (
         it.name?.toLowerCase().includes(q) ||
@@ -130,7 +359,6 @@ function App() {
       if (sort === 'date_added') return (b.date_added ?? '').localeCompare(a.date_added ?? '');
       return (a.name ?? '').localeCompare(b.name ?? '');
     });
-
     return out;
   }, [items, query, type, sort]);
 
@@ -140,8 +368,11 @@ function App() {
   }, [filtered]);
 
   const counts = useMemo(() => {
-    const c = { all: items.length, skill: 0, command: 0, mcp: 0, plugin: 0 };
-    for (const it of items) c[it.type] = (c[it.type] ?? 0) + 1;
+    const c = { all: items.length, skill: 0, command: 0, mcp: 0, plugin: 0, stale: 0 };
+    for (const it of items) {
+      c[it.type] = (c[it.type] ?? 0) + 1;
+      if (isStale(it)) c.stale += 1;
+    }
     return c;
   }, [items]);
 
@@ -149,6 +380,79 @@ function App() {
     () => items.reduce((acc, it) => acc + (it.usage?.count ?? 0), 0),
     [items],
   );
+
+  const groups = useMemo(() => buildGroups(filtered, cwd), [filtered, cwd]);
+
+  function renderFlat() {
+    return html`
+      <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
+        ${filtered.map((it) => html`
+          <${ItemRow}
+            key=${it.id}
+            item=${it}
+            selected=${selected?.id === it.id}
+            onSelect=${setSelected}
+          />
+        `)}
+      </ul>
+    `;
+  }
+
+  function renderTree() {
+    return html`
+      <div>
+        ${groups.pluginGroups.length ? html`
+          <div class="px-4 pt-3 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">Installed plugins</div>
+          <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
+            ${groups.pluginGroups.map((g) => html`
+              <li key=${g.name}>
+                <div
+                  onClick=${() => togglePlugin(g.name)}
+                  class="px-4 py-2 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-900 flex items-center gap-2 select-none"
+                >
+                  <span class="text-zinc-500 mono text-xs w-3 inline-block">${expanded.has(g.name) ? '▾' : '▸'}</span>
+                  <${TypeChip} type="plugin" />
+                  <span class="font-medium text-sm">${g.parent.title || g.parent.name}</span>
+                  <span class="text-[11px] text-zinc-500 mono ml-auto">${g.children.length} items · ${g.parent.usage?.count ?? 0} uses</span>
+                </div>
+                ${expanded.has(g.name) && g.children.length > 0 && html`
+                  <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70 bg-zinc-50/50 dark:bg-zinc-900/40">
+                    ${g.children.map((c) => html`
+                      <${ItemRow}
+                        key=${c.id}
+                        item=${c}
+                        selected=${selected?.id === c.id}
+                        onSelect=${setSelected}
+                        indent=${1}
+                      />
+                    `)}
+                  </ul>
+                `}
+              </li>
+            `)}
+          </ul>
+        ` : null}
+
+        ${groups.userItems.length ? html`
+          <div class="px-4 pt-4 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">User</div>
+          <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
+            ${groups.userItems.map((it) => html`
+              <${ItemRow} key=${it.id} item=${it} selected=${selected?.id === it.id} onSelect=${setSelected} />
+            `)}
+          </ul>
+        ` : null}
+
+        ${groups.projectItems.length ? html`
+          <div class="px-4 pt-4 pb-1 text-[11px] uppercase tracking-wider text-zinc-500">${groups.projectLabel}</div>
+          <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
+            ${groups.projectItems.map((it) => html`
+              <${ItemRow} key=${it.id} item=${it} selected=${selected?.id === it.id} onSelect=${setSelected} />
+            `)}
+          </ul>
+        ` : null}
+      </div>
+    `;
+  }
 
   return html`
     <div class="h-full flex flex-col">
@@ -188,6 +492,7 @@ function App() {
         >
           ${SORTS.map((s) => html`<option key=${s.id} value=${s.id}>${s.label}</option>`)}
         </select>
+        <${ViewModeToggle} viewMode=${viewMode} onToggle=${toggleViewMode} />
         <${ThemeToggle} theme=${theme} onToggle=${toggleTheme} />
       </header>
 
@@ -198,28 +503,7 @@ function App() {
           ${!loading && !error && filtered.length === 0 && html`
             <div class="p-5 text-zinc-500 text-sm">No items match.</div>
           `}
-          <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
-            ${filtered.map((it) => html`
-              <li
-                key=${it.id}
-                onClick=${() => setSelected(it)}
-                class="px-4 py-3 cursor-pointer transition border-l-2 ${selected?.id === it.id
-                  ? 'bg-amber-50 dark:bg-amber-500/10 border-l-amber-500'
-                  : 'hover:bg-zinc-100 dark:hover:bg-zinc-900 border-l-transparent'}"
-              >
-                <div class="flex items-center gap-2 flex-wrap">
-                  <${TypeChip} type=${it.type} />
-                  <span class="font-medium text-sm truncate">${it.title || it.name}</span>
-                  <${ScopeBadge} scope=${it.scope} />
-                </div>
-                <div class="mt-1 text-xs text-zinc-600 dark:text-zinc-400 line-clamp-2">${it.description}</div>
-                <div class="mt-1.5 flex gap-3 text-[11px] text-zinc-500 mono">
-                  <span>${it.usage?.count ?? 0} uses</span>
-                  <span>last ${relTime(it.usage?.last_ts)}</span>
-                </div>
-              </li>
-            `)}
-          </ul>
+          ${!loading && !error && (viewMode === 'tree' ? renderTree() : renderFlat())}
         </section>
 
         <section class="overflow-y-auto bg-white dark:bg-zinc-900/40">
@@ -228,9 +512,15 @@ function App() {
               <div class="flex items-center gap-2 mb-2">
                 <${TypeChip} type=${selected.type} />
                 <${ScopeBadge} scope=${selected.scope} />
+                ${isStale(selected) && html`<${TypeChip} type="stale" />`}
               </div>
               <h1 class="text-xl font-semibold tracking-tight">${selected.title || selected.name}</h1>
               <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed">${selected.description}</p>
+
+              <div class="mt-5">
+                <${Sparkline} data=${selected.usage?.daily} width=${240} height=${48} />
+                <div class="mt-1 text-[11px] text-zinc-500 mono">60-day usage</div>
+              </div>
 
               <dl class="mt-6 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
                 <div>
@@ -251,7 +541,10 @@ function App() {
                 </div>
                 <div class="col-span-2">
                   <dt class="text-[11px] uppercase tracking-wider text-zinc-500">Source</dt>
-                  <dd class="mono text-xs break-all text-zinc-700 dark:text-zinc-400">${selected.source_path}</dd>
+                  <dd class="mt-1 space-y-2">
+                    <div class="mono text-xs break-all text-zinc-700 dark:text-zinc-400">${selected.source_path}</div>
+                    <${EditorLinks} path=${selected.source_path} />
+                  </dd>
                 </div>
               </dl>
 
@@ -260,13 +553,15 @@ function App() {
                   ${selected.tags.map((t) => html`<span class="px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 text-[11px] mono">${t}</span>`)}
                 </div>
               ` : null}
+
+              <${SourceBody} id=${selected.id} />
             </article>
           ` : html`<div class="p-6 text-zinc-500 text-sm">Select an item.</div>`}
         </section>
       </main>
 
       <footer class="border-t border-zinc-200 dark:border-zinc-800 px-5 py-2 text-[11px] text-zinc-500 mono flex justify-between">
-        <span>${items.length} items · ${totalUses.toLocaleString()} total uses · refreshes every 10s</span>
+        <span>${items.length} items · ${totalUses.toLocaleString()} total uses · ${counts.stale} stale · refreshes every 10s</span>
         <span>${scannedAt ? `scanned ${new Date(scannedAt).toLocaleTimeString()}` : ''}</span>
       </footer>
     </div>
