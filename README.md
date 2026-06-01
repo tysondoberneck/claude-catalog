@@ -10,11 +10,14 @@ Once you've installed a few dozen skills, plugins, and MCP servers, discoverabil
 
 ## Install
 
+Two commands in Claude Code:
+
 ```
-/plugin install tysondoberneck/claude-catalog
+/plugin marketplace add tysondoberneck/claude-catalog
+/plugin install catalog@claude-catalog
 ```
 
-That's it. The plugin registers the `/catalog` slash command and three lightweight hooks that record usage in the background.
+The first adds this repo as a marketplace. The second installs the `catalog` plugin from it. The plugin registers the `/catalog` slash command and three lightweight hooks that record usage in the background.
 
 ## What gets tracked
 

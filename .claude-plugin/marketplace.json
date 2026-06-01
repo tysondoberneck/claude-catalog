@@ -1,0 +1,14 @@
+{
+  "name": "claude-catalog",
+  "owner": {
+    "name": "Tyson Doberneck",
+    "url": "https://github.com/tysondoberneck"
+  },
+  "plugins": [
+    {
+      "name": "catalog",
+      "source": ".",
+      "description": "Browse and search every skill, MCP tool, plugin, and slash command installed in your Claude Code environment, with automatic usage tracking."
+    }
+  ]
+}
