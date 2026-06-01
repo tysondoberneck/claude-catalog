@@ -1,0 +1,12 @@
+{
+  "name": "catalog",
+  "version": "0.1.0",
+  "description": "Browse and search every skill, MCP tool, plugin, and slash command installed in your Claude Code environment, with automatic usage tracking.",
+  "author": {
+    "name": "Tyson Doberneck",
+    "url": "https://github.com/tysondoberneck"
+  },
+  "homepage": "https://github.com/tysondoberneck/claude-catalog",
+  "keywords": ["claude-code", "plugin", "catalog", "discoverability", "skills", "mcp"],
+  "license": "MIT"
+}
