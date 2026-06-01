@@ -116,24 +116,34 @@ async function handleApiItems(req, res) {
     // MCP server items: roll up per-tool events (id "mcp:<server>:<tool>") to
     // the server-level item. Per-tool calls live in session transcripts; the
     // catalog displays one item per server with aggregate stats.
+    let tools = null;
     if (item.type === 'mcp') {
       const prefix = item.id + ':';
       let count = u?.count ?? 0;
       let last_ts = u?.last_ts ?? 0;
       let errors = u?.errors ?? 0;
       const daily = [...(u?.daily ?? emptyDaily())];
+      // Per-tool ids look like `mcp:<server>:<tool>`. Collect them as a
+      // tools[] breakdown so the detail pane can show what tools this server
+      // exposes (well, the ones we've ever seen called — we don't probe the
+      // server itself).
+      tools = [];
       for (const [eid, e] of usage) {
         if (eid.startsWith(prefix)) {
+          const toolName = eid.slice(prefix.length);
+          tools.push({ name: toolName, count: e.count, last_ts: e.last_ts });
           count += e.count;
           if (e.last_ts > last_ts) last_ts = e.last_ts;
           errors += e.errors;
           addDaily(daily, e.daily);
         }
       }
+      tools.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
       u = { count, last_ts, errors, daily };
     }
     return {
       ...item,
+      ...(tools ? { tools } : {}),
       usage: u
         ? { count: u.count, last_ts: u.last_ts, errors: u.errors, daily: u.daily ?? emptyDaily() }
         : { count: 0, last_ts: 0, errors: 0, daily: emptyDaily() },

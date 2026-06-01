@@ -262,12 +262,48 @@ async function scanAllInstalledPlugins() {
       for (const version of await safeReaddir(pluginDir)) {
         if (!version.isDirectory()) continue;
         const versionDir = join(pluginDir, version.name);
-        if (!existsSync(join(versionDir, '.in_use'))) continue;
-        out.push(...(await scanInstalledPlugin(versionDir, plugin.name, version.name)));
+        const inUse = existsSync(join(versionDir, '.in_use'));
+        const items = await scanInstalledPlugin(versionDir, plugin.name, version.name);
+        if (inUse) {
+          out.push(...items);
+        } else {
+          // Surface disabled plugins so the user knows they're sitting in the
+          // cache but not active. Only emit the parent entry — children
+          // wouldn't actually be available, and listing them would clutter
+          // the type filters with unreachable items.
+          const parent = items.find((it) => it.type === 'plugin');
+          if (parent) {
+            parent.disabled = true;
+            parent.description = `Installed but disabled. ${parent.description}`;
+            out.push(parent);
+          }
+        }
       }
     }
   }
   return out;
+}
+
+// MCPs that Claude Code provides natively — they aren't declared in any
+// .mcp.json or plugin manifest, so the scanner can't discover them by walking
+// disk. Listed here so the catalog still surfaces them. Treat as built-in
+// (hidden by default behind the show-built-ins toggle).
+const BUILTIN_MCPS = {
+  ide: 'IDE integration (VS Code / Cursor / JetBrains). Exposes diagnostics and code execution to Claude from your editor.',
+};
+
+function builtinMcpItems() {
+  return Object.entries(BUILTIN_MCPS).map(([name, description]) => ({
+    id: `mcp:${name}`,
+    type: 'mcp',
+    scope: 'builtin',
+    name,
+    title: name,
+    description,
+    source_path: null,
+    date_added: null,
+    tags: ['builtin'],
+  }));
 }
 
 async function scanUserScope() {
@@ -323,6 +359,7 @@ export async function scanInventory({ cwd = process.cwd() } = {}) {
     scanUserScope(),
     scanProjectScope(cwd),
   ]);
-  // Project overrides user overrides plugins for any id collisions.
-  return dedupeLastWins([...plugins, ...user, ...project]);
+  // Project overrides user overrides plugins for any id collisions. Built-in
+  // MCPs come last so configured MCPs with the same name win.
+  return dedupeLastWins([...builtinMcpItems(), ...plugins, ...user, ...project]);
 }

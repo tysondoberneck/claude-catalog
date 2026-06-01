@@ -84,9 +84,9 @@ Working. Roadmap:
 - [x] Filesystem scanner (skills, commands, MCP, plugins; user / project / plugin scopes)
 - [x] Historical backfill from `history.jsonl` + session transcripts + `skillUsage`
 - [x] UI: list / tree views, search, type filters, sort, light/dark, sparklines, source-body preview, open-in-editor links, configurable activity window
-- [ ] Keyboard navigation + URL deep linking
-- [ ] MCP `tools/list` enumeration for per-tool detail under server items
-- [ ] Surface built-in MCPs (computer-use, etc.) and disabled plugins
+- [x] Keyboard navigation (`j`/`k`, arrows, `g`/`G`, `/` to search, `Esc` to clear) and URL deep linking (filters in query, selected item in hash)
+- [x] MCP per-tool breakdown under each server item (inferred from session transcripts)
+- [x] Built-in MCPs (e.g. `ide`) and disabled plugins surfaced in the catalog
 
 ## License
 

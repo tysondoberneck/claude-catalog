@@ -1,5 +1,5 @@
 import { h, render } from 'https://esm.sh/preact@10.22.0';
-import { useEffect, useMemo, useState } from 'https://esm.sh/preact@10.22.0/hooks';
+import { useEffect, useMemo, useRef, useState } from 'https://esm.sh/preact@10.22.0/hooks';
 import htm from 'https://esm.sh/htm@3.1.1';
 import { marked } from 'https://esm.sh/marked@12.0.2';
 
@@ -76,6 +76,11 @@ function ScopeBadge({ scope }) {
 
 function isOrphan(item) {
   return item.scope === 'builtin' || item.scope === 'external';
+}
+
+function DisabledBadge({ disabled }) {
+  if (!disabled) return null;
+  return html`<span class="px-1.5 py-0.5 rounded ring-1 ring-zinc-400/60 text-zinc-500 dark:text-zinc-400 text-[10px] font-medium uppercase tracking-wider mono" title="Plugin is installed in the cache but disabled — its skills/commands aren't currently available.">disabled</span>`;
 }
 
 // --- Sparkline ---
@@ -239,6 +244,7 @@ function ItemRow({ item, selected, onSelect, indent = 0 }) {
   const showDesc = !isOrphan(item) && item.description;
   return html`
     <li
+      data-id=${item.id}
       onClick=${() => onSelect(item)}
       class="py-3 cursor-pointer transition border-l-2 ${selected
         ? 'bg-amber-50 dark:bg-amber-500/10 border-l-amber-500'
@@ -249,6 +255,7 @@ function ItemRow({ item, selected, onSelect, indent = 0 }) {
         <${TypeChip} type=${item.type} />
         <span class="font-medium text-sm truncate">${item.title || item.name}</span>
         <${ScopeBadge} scope=${item.scope} />
+        <${DisabledBadge} disabled=${item.disabled} />
       </div>
       ${showDesc && html`<div class="mt-1 text-xs text-zinc-600 dark:text-zinc-400 line-clamp-2">${item.description}</div>`}
       <div class="mt-1.5 flex items-center gap-3 text-[11px] text-zinc-500 mono">
@@ -299,26 +306,48 @@ function buildGroups(items, cwd) {
   };
 }
 
+// URL state — filters live in the query string, selected item lives in the
+// hash. Initial render reads from the URL so deep links restore the same view.
+function urlState() {
+  const p = new URLSearchParams(location.search);
+  const hashMatch = location.hash.match(/i=([^&]+)/);
+  return {
+    type:         p.get('type')  ?? null,
+    query:        p.get('q')     ?? null,
+    windowId:     p.get('w')     ?? null,
+    sort:         p.get('s')     ?? null,
+    viewMode:     p.get('v')     ?? null,
+    showBuiltins: p.get('b') === '1' ? true : (p.get('b') === '0' ? false : null),
+    selectedId:   hashMatch ? decodeURIComponent(hashMatch[1]) : null,
+  };
+}
+
 // --- App ---
 function App() {
+  const initial = urlState();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [query, setQuery] = useState('');
-  const [type, setType] = useState('all');
-  const [sort, setSort] = useState(localStorage.getItem('catalog.sort') || 'recent');
+  const [query, setQuery] = useState(initial.query ?? '');
+  const [type, setType] = useState(initial.type ?? 'all');
+  const [sort, setSort] = useState(initial.sort ?? localStorage.getItem('catalog.sort') ?? 'recent');
   const [selected, setSelected] = useState(null);
   const [scannedAt, setScannedAt] = useState(null);
   const [cwd, setCwd] = useState('');
   const [theme, setTheme] = useState(document.documentElement.classList.contains('dark') ? 'dark' : 'light');
-  const [viewMode, setViewMode] = useState(localStorage.getItem('catalog.viewMode') || 'list');
+  const [viewMode, setViewMode] = useState(initial.viewMode ?? localStorage.getItem('catalog.viewMode') ?? 'list');
   const [expanded, setExpanded] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('catalog.expanded') || '[]')); }
     catch { return new Set(); }
   });
-  const [windowId, setWindowId] = useState(localStorage.getItem('catalog.window') || '14');
+  const [windowId, setWindowId] = useState(initial.windowId ?? localStorage.getItem('catalog.window') ?? '14');
   const windowDays = (WINDOWS.find((w) => w.id === windowId) ?? WINDOWS[1]).days;
-  const [showBuiltins, setShowBuiltins] = useState(localStorage.getItem('catalog.showBuiltins') === '1');
+  const [showBuiltins, setShowBuiltins] = useState(
+    initial.showBuiltins ?? (localStorage.getItem('catalog.showBuiltins') === '1'),
+  );
+  const searchRef = useRef(null);
+  const listRef = useRef(null);
+  const pendingSelectedId = useRef(initial.selectedId);
   function toggleBuiltins() {
     const next = !showBuiltins;
     setShowBuiltins(next);
@@ -384,6 +413,32 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
+  // Resolve the URL-deep-linked selection once inventory is loaded.
+  useEffect(() => {
+    if (!items.length || !pendingSelectedId.current) return;
+    const target = items.find((it) => it.id === pendingSelectedId.current);
+    pendingSelectedId.current = null;
+    if (target) setSelected(target);
+  }, [items.length]);
+
+  // Sync state back into the URL so deep links are shareable. replaceState so
+  // we don't churn history per keystroke.
+  useEffect(() => {
+    const p = new URLSearchParams();
+    if (query)             p.set('q', query);
+    if (type !== 'all')    p.set('type', type);
+    if (windowId !== '14') p.set('w', windowId);
+    if (sort !== 'recent') p.set('s', sort);
+    if (viewMode !== 'list') p.set('v', viewMode);
+    if (showBuiltins)      p.set('b', '1');
+    const qs = p.toString();
+    const hash = selected ? `#i=${encodeURIComponent(selected.id)}` : '';
+    const newUrl = `${location.pathname}${qs ? '?' + qs : ''}${hash}`;
+    if (newUrl !== location.pathname + location.search + location.hash) {
+      history.replaceState(null, '', newUrl);
+    }
+  }, [query, type, windowId, sort, viewMode, showBuiltins, selected?.id]);
+
   // Search filter only (no type, no window). Tree view uses this so plugin
   // headers and their children always group correctly regardless of which
   // type pill is active — the type filter is applied at the leaf level
@@ -433,7 +488,9 @@ function App() {
   }, [items, query, type, sort, windowDays, showBuiltins]);
 
   useEffect(() => {
-    if (!selected && filtered.length) { setSelected(filtered[0]); return; }
+    // Don't pick a default if the URL hash is still waiting to resolve to a
+    // specific item — that effect runs on the next pass.
+    if (!selected && !pendingSelectedId.current && filtered.length) { setSelected(filtered[0]); return; }
     // Selection vanished from inventory entirely — reset to first visible.
     if (selected && !items.find((it) => it.id === selected.id)) {
       setSelected(filtered[0] ?? null);
@@ -446,6 +503,38 @@ function App() {
       setSelected(filtered[0]);
     }
   }, [filtered, items]);
+
+  // Keyboard navigation. Mounted after `filtered` is declared.
+  useEffect(() => {
+    function moveSelection(delta) {
+      if (!filtered.length) return;
+      const idx = filtered.findIndex((it) => it.id === selected?.id);
+      const next = Math.max(0, Math.min(filtered.length - 1, (idx < 0 ? 0 : idx + delta)));
+      const item = filtered[next];
+      setSelected(item);
+      requestAnimationFrame(() => {
+        const node = listRef.current?.querySelector(`[data-id="${CSS.escape(item.id)}"]`);
+        node?.scrollIntoView({ block: 'nearest' });
+      });
+    }
+    function onKey(e) {
+      const target = e.target;
+      const tag = target?.tagName;
+      const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable;
+      if (isTyping) {
+        if (e.key === 'Escape') target.blur?.();
+        return;
+      }
+      if (e.key === '/')                  { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select?.(); return; }
+      if (e.key === 'Escape' && query)    { setQuery(''); return; }
+      if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1);  return; }
+      if (e.key === 'k' || e.key === 'ArrowUp')   { e.preventDefault(); moveSelection(-1); return; }
+      if (e.key === 'g')                  { e.preventDefault(); if (filtered.length) setSelected(filtered[0]); return; }
+      if (e.key === 'G')                  { e.preventDefault(); if (filtered.length) setSelected(filtered[filtered.length - 1]); return; }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [filtered, selected?.id, query]);
 
   const counts = useMemo(() => {
     // Type-pill counts only include items inside the activity window so the
@@ -546,6 +635,7 @@ function App() {
                   <span class="text-zinc-500 mono text-xs w-3 inline-block">${expanded.has(g.name) ? '▾' : '▸'}</span>
                   <${TypeChip} type="plugin" />
                   <span class="font-medium text-sm">${g.parent.title || g.parent.name}</span>
+                  <${DisabledBadge} disabled=${g.parent.disabled} />
                   <span class="text-[11px] text-zinc-500 mono ml-auto">${g.visibleChildren.length} items · ${g.parent.usage?.count ?? 0} uses</span>
                 </div>
                 ${expanded.has(g.name) && g.visibleChildren.length > 0 && html`
@@ -598,8 +688,9 @@ function App() {
           </div>
           <div class="flex-1 max-w-2xl">
             <input
+              ref=${searchRef}
               type="search"
-              placeholder="Search skills, commands, MCP tools, plugins…"
+              placeholder="Search (press /)…"
               value=${query}
               onInput=${(e) => setQuery(e.currentTarget.value)}
               class="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md px-3 py-1.5 text-sm placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500"
@@ -656,7 +747,7 @@ function App() {
       </header>
 
       <main class="flex-1 grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] overflow-hidden">
-        <section class="overflow-y-auto border-r border-zinc-200 dark:border-zinc-800">
+        <section ref=${listRef} class="overflow-y-auto border-r border-zinc-200 dark:border-zinc-800">
           ${loading && html`<div class="p-5 text-zinc-500 text-sm">Loading…</div>`}
           ${error && html`<div class="p-5 text-rose-600 dark:text-rose-400 text-sm">Failed to load: ${error}</div>`}
           ${!loading && !error && filtered.length === 0 && html`
@@ -671,6 +762,7 @@ function App() {
               <div class="flex items-center gap-2 mb-2">
                 <${TypeChip} type=${selected.type} />
                 <${ScopeBadge} scope=${selected.scope} />
+                <${DisabledBadge} disabled=${selected.disabled} />
                 ${isStaleForWindow(selected, windowDays) && html`<${TypeChip} type="stale" />`}
               </div>
               <h1 class="text-xl font-semibold tracking-tight">${selected.title || selected.name}</h1>
@@ -709,6 +801,22 @@ function App() {
                   </div>
                 ` : null}
               </dl>
+
+              ${selected.type === 'mcp' && selected.tools?.length ? html`
+                <div class="mt-6">
+                  <div class="text-[11px] uppercase tracking-wider text-zinc-500 mb-2">Tools used (${selected.tools.length})</div>
+                  <ul class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70 ring-1 ring-zinc-200 dark:ring-zinc-800 rounded-md">
+                    ${selected.tools.map((t) => html`
+                      <li key=${t.name} class="px-3 py-2 flex items-center gap-3 text-xs">
+                        <span class="mono text-zinc-800 dark:text-zinc-200 truncate flex-1">${t.name}</span>
+                        <span class="mono text-zinc-500">${t.count} use${t.count === 1 ? '' : 's'}</span>
+                        <span class="mono text-zinc-500 w-20 text-right">${relTime(t.last_ts)}</span>
+                      </li>
+                    `)}
+                  </ul>
+                  <div class="mt-2 text-[11px] text-zinc-500">Inferred from session transcripts — tools never called won't appear here.</div>
+                </div>
+              ` : null}
 
               ${selected.tags?.length ? html`
                 <div class="mt-4 flex flex-wrap gap-1">
