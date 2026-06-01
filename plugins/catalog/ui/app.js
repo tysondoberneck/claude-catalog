@@ -353,6 +353,21 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
+  // Search + type filter only (no activity window). Tree view uses this so
+  // expanding a plugin shows ALL its children, not just in-window ones.
+  const searchTypeFiltered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return items.filter((it) => {
+      if (type !== 'all' && type !== 'stale' && it.type !== type) return false;
+      if (!q) return true;
+      return (
+        it.name?.toLowerCase().includes(q) ||
+        it.title?.toLowerCase().includes(q) ||
+        it.description?.toLowerCase().includes(q)
+      );
+    });
+  }, [items, query, type]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     let out = items.filter((it) => {
@@ -384,8 +399,11 @@ function App() {
 
   useEffect(() => {
     if (!selected && filtered.length) setSelected(filtered[0]);
-    if (selected && !filtered.find((it) => it.id === selected.id)) setSelected(filtered[0] ?? null);
-  }, [filtered]);
+    // Only clear the selection if the item has vanished from inventory entirely
+    // (not just been filtered out by window/type/search) so the detail pane
+    // doesn't whiplash when the user picks a stale plugin in tree view.
+    if (selected && !items.find((it) => it.id === selected.id)) setSelected(filtered[0] ?? null);
+  }, [filtered, items]);
 
   const counts = useMemo(() => {
     // Type-pill counts only include items inside the activity window so the
@@ -407,7 +425,10 @@ function App() {
     [items],
   );
 
-  const groups = useMemo(() => buildGroups(filtered, cwd), [filtered, cwd]);
+  // Tree view groups from search/type-filtered items only — ignoring the
+  // activity window so expanding a plugin reveals its full contents even
+  // when most children haven't been used recently.
+  const groups = useMemo(() => buildGroups(searchTypeFiltered, cwd), [searchTypeFiltered, cwd]);
 
   function renderFlat() {
     return html`
@@ -433,8 +454,10 @@ function App() {
             ${groups.pluginGroups.map((g) => html`
               <li key=${g.name}>
                 <div
-                  onClick=${() => togglePlugin(g.name)}
-                  class="px-4 py-2 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-900 flex items-center gap-2 select-none"
+                  onClick=${() => { setSelected(g.parent); togglePlugin(g.name); }}
+                  class="px-4 py-2 cursor-pointer flex items-center gap-2 select-none border-l-2 ${selected?.id === g.parent.id
+                    ? 'bg-amber-50 dark:bg-amber-500/10 border-l-amber-500'
+                    : 'hover:bg-zinc-100 dark:hover:bg-zinc-900 border-l-transparent'}"
                 >
                   <span class="text-zinc-500 mono text-xs w-3 inline-block">${expanded.has(g.name) ? '▾' : '▸'}</span>
                   <${TypeChip} type="plugin" />
